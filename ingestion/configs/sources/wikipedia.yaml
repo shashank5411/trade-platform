@@ -1,0 +1,17 @@
+default_start_date:
+  dev: "2020-01-01"
+  prod: "2000-01-01"
+frequency: daily
+max_lookback_days: 30
+
+topics:
+  - Inflation
+  - Recession
+  - Federal_Reserve
+  - "S%26P_500"
+  - Quantitative_easing
+  - 2008_financial_crisis
+  - COVID-19_recession
+  - 2021-2023_inflation_surge
+  - Silicon_Valley_Bank
+  - Dot-com_bubble

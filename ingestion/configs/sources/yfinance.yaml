@@ -1,0 +1,28 @@
+default_start_date:
+  dev: "2020-01-01"
+  prod: "2000-01-01"
+frequency: daily
+max_lookback_days: 30
+
+tickers:
+  - SPY
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - META
+  - NVDA
+  - JPM
+  - BAC
+  - GS
+  - XOM
+  - CVX
+  - JNJ
+  - PFE
+  - WMT
+  - COST
+  - TSLA
+  - BRK-B
+  - UNH
+  - V
+  - MA

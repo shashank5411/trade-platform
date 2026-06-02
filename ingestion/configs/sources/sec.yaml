@@ -1,0 +1,14 @@
+default_start_date:
+  dev: "2020-01-01"
+  prod: "2000-01-01"
+frequency: quarterly
+max_lookback_days: 90
+
+companies:
+  AAPL:  "0000320193"
+  MSFT:  "0000789019"
+  GOOGL: "0001652044"
+  AMZN:  "0001018724"
+  JPM:   "0000019617"
+  BAC:   "0000070858"
+  XOM:   "0000034088"

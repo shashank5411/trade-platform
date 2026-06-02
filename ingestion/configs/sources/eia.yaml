@@ -1,0 +1,6 @@
+default_start_period:
+  prod: "2015-01"
+  dev: "2023-01"
+frequency: monthly
+incremental_granularity: month
+max_lookback_periods: 3

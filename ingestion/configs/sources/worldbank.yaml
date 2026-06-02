@@ -1,0 +1,21 @@
+default_start_date:
+  dev: "2020-01-01"
+  prod: "2000-01-01"
+frequency: annual
+max_lookback_days: 730
+
+indicators:
+  NY.GDP.MKTP.CD: gdp_current_usd
+  NY.GDP.PCAP.CD: gdp_per_capita_usd
+  FP.CPI.TOTL.ZG: inflation_pct
+  SP.POP.TOTL:    population
+  NE.TRD.GNFS.ZS: trade_pct_gdp
+
+countries:
+  - US
+  - CN
+  - IN
+  - GB
+  - DE
+  - JP
+  - BR

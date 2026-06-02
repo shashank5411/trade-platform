@@ -1,0 +1,15 @@
+default_start_date:
+  dev: "2020-01-01"
+  prod: "2000-01-01"
+frequency: monthly
+max_lookback_days: 90
+
+series:
+  GDP:      gdp_billions_usd
+  CPIAUCSL: cpi_all_urban
+  FEDFUNDS: fed_funds_rate_pct
+  UNRATE:   unemployment_rate_pct
+  M2SL:     m2_money_supply_billions
+  DGS10:    treasury_10y_yield_pct
+  DGS2:     treasury_2y_yield_pct
+  UMCSENT:  consumer_sentiment_index
