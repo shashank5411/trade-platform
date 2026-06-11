@@ -19,6 +19,25 @@ from utils.config import get_default_start, load_source_config
 from utils.dates import current_date_str, subtract_days
 from utils.watermark import get_watermark, update_watermark
 
+EXCHANGE_NORMALIZE = {
+    "NYQ": "NYSE", "NYSEArca": "NYSE",
+    "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ",
+    "LSE": "LSE",
+    "NSI": "NSE",
+}
+
+
+def fetch_ticker_meta(ticker: str) -> dict:
+    try:
+        info   = yf.Ticker(ticker).fast_info
+        raw_ex = getattr(info, "exchange", "NMS")
+        return {
+            "exchange": EXCHANGE_NORMALIZE.get(raw_ex, "NASDAQ"),
+            "currency": getattr(info, "currency", "USD"),
+        }
+    except Exception:
+        return {"exchange": "NASDAQ", "currency": "USD"}
+
 
 def _arg(name: str, default: str = "") -> str:
     for i, a in enumerate(sys.argv[1:], 1):
@@ -83,6 +102,12 @@ def fetch_market_data(tickers: list, start: str, end: str) -> dict[str, list]:
         df["ticker"] = tickers[0]
         df["Date"]   = df["Date"].dt.strftime("%Y-%m-%d")
         per_ticker[tickers[0]] = df.to_dict(orient="records")
+
+    for ticker, records in per_ticker.items():
+        meta = fetch_ticker_meta(ticker)
+        for r in records:
+            r["exchange"] = meta["exchange"]
+            r["currency"] = meta["currency"]
 
     total = sum(len(v) for v in per_ticker.values())
     print(f"  {total} OHLCV rows across {len(tickers)} tickers")

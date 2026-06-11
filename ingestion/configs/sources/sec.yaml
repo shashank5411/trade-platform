@@ -4,6 +4,20 @@ default_start_date:
 frequency: quarterly
 max_lookback_days: 90
 
+# sec.yaml
+prose_lookback:
+  dev:  1    # last year only — ~5 filings per company
+  prod: 5    # last 5 years — ~25 filings per company
+
+# sec.yaml
+prose_cutoff:
+  dev:
+    10-K: 2023-01-01    # last ~2 annual reports
+    10-Q: 2025-01-01    # last ~4 quarterly reports
+  prod:
+    10-K: 2019-01-01    # last 5 annual reports  
+    10-Q: 2023-01-01    # last ~8 quarterly reports
+    
 companies:
   AAPL:  "0000320193"
   MSFT:  "0000789019"

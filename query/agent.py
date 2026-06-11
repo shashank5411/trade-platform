@@ -1,181 +1,155 @@
 """
-ReAct agent loop — the bridge between LLM and query tools.
-Implements the raw Anthropic tool use loop from first principles.
-No frameworks — transparent and debuggable.
+ReAct agent — entry point with memory and orchestration.
+Phase 5: named sessions, DynamoDB memory, sub-agent routing.
 """
 
 import os
 import sys
-import json
-import anthropic
-from typing import Optional
+import argparse
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from query.tools import TOOLS, get_registry
+from query.memory       import save_turn, load_turns, list_sessions, clear_session
+from query.orchestrator import run as orchestrate
 
-# ── Config ─────────────────────────────────────────────────────────────────
-## MODEL          = "claude-sonnet-4-6"
-MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS     = 4096
-MAX_ITERATIONS = 10   # safety ceiling on tool call loops
+ENV = os.environ.get("ENV", "dev")
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import anthropic
+import os; get_anthropic_key = lambda: os.environ["ANTHROPIC_API_KEY"]
 
-SYSTEM_PROMPT = """
-You are a financial analyst assistant with access to a structured 
-economic intelligence platform covering:
+client = anthropic.Anthropic(api_key=get_anthropic_key())
 
-- Stock prices (US equities, 2020-present)
-- Macro economic indicators (FRED: US series, World Bank: global)  
-- SEC filings (10-K annual, 10-Q quarterly for major US companies)
-- Wikipedia articles on economic topics
-
-Your methodology:
-1. Always fetch data before answering quantitative questions
-2. Use get_macro_snapshot first for questions about economic context
-3. For company questions, fetch both prices AND documents for full picture
-4. State what data you found and what period it covers
-5. If data is unavailable or incomplete, say so explicitly
-6. Never use your training knowledge for specific numbers — 
-   always ground in fetched data
-
-Available companies: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM
-Available macro series: FEDFUNDS, UNRATE, CPIAUCSL, DGS10, DGS2, 
-                        GDP, M2SL, UMCSENT
-Available Wikipedia topics: Inflation, Recession, Federal_Reserve,
-                            quantitative_easing, 2008_financial_crisis
-Data range: 2020-01-01 to present (dev environment)
-"""
-
-client   = anthropic.Anthropic()
-registry = get_registry()
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Trade Platform — financial intelligence agent"
+    )
+    p.add_argument("--session",       default=None,
+                   help="Session name for persistent memory (e.g. 'q3-analysis')")
+    p.add_argument("--question",      default=None,
+                   help="Single question (non-interactive mode)")
+    p.add_argument("--list-sessions", action="store_true",
+                   help="List all active sessions")
+    p.add_argument("--clear-session", default=None,
+                   help="Clear a named session")
+    p.add_argument("--no-memory",     action="store_true",
+                   help="Disable memory for this run")
+    p.add_argument("--verbose",       action="store_true", default=True,
+                   help="Show tool calls and routing")
+    return p.parse_args()
 
 
-# ── Core loop ──────────────────────────────────────────────────────────────
+def make_session_id(name: str) -> str:
+    """Normalize session name to a safe DynamoDB key."""
+    return name.strip().lower().replace(" ", "-")
 
-def run(
-    question:       str,
-    verbose:        bool = True,
-    max_iterations: int  = MAX_ITERATIONS
+
+def run_question(
+    question:   str,
+    session_id: str  = None,
+    use_memory: bool = True,
+    verbose:    bool = True,
 ) -> str:
-    """
-    Run the ReAct agent loop for a question.
+    """Run a single question through the orchestrator with memory."""
 
-    Args:
-        question:       User's question in plain English
-        verbose:        Print tool calls and results as they happen
-        max_iterations: Safety ceiling on loop iterations
+    # Load history
+    history = []
+    if use_memory and session_id:
+        history = load_turns(session_id)
+        if history and verbose:
+            print(f"[Memory] loaded {len(history)} prior turns "
+            f"from session '{session_id}'")
+            
+    # Run through orchestrator
+    answer = orchestrate(
+        question,
+        history=history,
+        verbose=verbose,
+        session_id=session_id,
+    )
 
-    Returns:
-        Final answer string grounded in fetched data
-    """
-    messages = [{"role": "user", "content": question}]
+    # Save to memory
+    if use_memory and session_id:
+        save_turn(session_id, "user",      question)
+        save_turn(session_id, "assistant", answer)
 
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"Question: {question}")
-        print(f"{'='*60}")
+    return answer
 
-    for iteration in range(max_iterations):
 
-        # Call LLM
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages
+def interactive_loop(session_id: str, use_memory: bool, verbose: bool):
+    """Interactive REPL loop."""
+    mem_status = f"session='{session_id}'" if session_id else "no memory"
+    print(f"\nTrade Platform Agent ({mem_status})")
+    print("Type 'exit' to quit, 'history' to see session turns\n")
+
+    while True:
+        try:
+            question = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            break
+
+        if not question:
+            continue
+        if question.lower() in ("exit", "quit", "q"):
+            print("Goodbye.")
+            break
+        if question.lower() == "history":
+            if session_id:
+                turns = load_turns(session_id, max_turns=20)
+                for t in turns:
+                    print(f"\n[{t['role'].upper()}] {t['content'][:200]}")
+            else:
+                print("No session active.")
+            continue
+
+        answer = run_question(
+            question,
+            session_id=session_id,
+            use_memory=use_memory,
+            verbose=verbose,
         )
+        print(f"\nAgent: {answer}\n")
 
-        # Append LLM response to history
-        messages.append({
-            "role":    "assistant",
-            "content": response.content
-        })
 
-        # ── End turn — LLM has final answer ───────────────────────────
-        if response.stop_reason == "end_turn":
-            answer = _extract_text(response)
-            if verbose:
-                print(f"\n{'─'*60}")
-                print(f"Answer ({iteration+1} iterations):")
-                print(answer)
-            return answer
+def main():
+    args = parse_args()
 
-        # ── Tool use — LLM wants to call a function ────────────────────
-        elif response.stop_reason == "tool_use":
-            tool_results = []
-
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-
-                tool_name   = block.name
-                tool_inputs = block.input
-
-                if verbose:
-                    print(f"\n[Iteration {iteration+1}] "
-                          f"Tool: {tool_name}")
-                    print(f"  Inputs: {json.dumps(tool_inputs, indent=2)}")
-
-                # Execute the tool
-                result = _execute_tool(tool_name, tool_inputs)
-
-                if verbose:
-                    # Show first 300 chars of result
-                    preview = result[:300] + "..." \
-                              if len(result) > 300 else result
-                    print(f"  Result preview: {preview}")
-
-                tool_results.append({
-                    "type":        "tool_result",
-                    "tool_use_id": block.id,
-                    "content":     result
-                })
-
-            # Send tool results back to LLM
-            messages.append({
-                "role":    "user",
-                "content": tool_results
-            })
-
+    # -- List sessions
+    if args.list_sessions:
+        sessions = list_sessions()
+        if sessions:
+            print("Active sessions:")
+            for s in sessions:
+                print(f"  {s}")
         else:
-            # Unexpected stop reason
-            return f"Unexpected stop reason: {response.stop_reason}"
+            print("No active sessions.")
+        return
 
-    return f"Reached max iterations ({max_iterations}) without final answer."
+    # -- Clear session
+    if args.clear_session:
+        sid   = make_session_id(args.clear_session)
+        count = clear_session(sid)
+        print(f"Cleared {count} turns from session '{sid}'")
+        return
 
+    session_id = make_session_id(args.session) if args.session else None
+    use_memory = not args.no_memory
 
-def _execute_tool(name: str, inputs: dict) -> str:
-    """Look up and execute a tool by name. Returns string result."""
-    if name not in registry:
-        return f"Unknown tool: {name}"
-    try:
-        fn     = registry[name]
-        result = fn(**inputs)
-        # Ensure result is a string — LLM expects text
-        return str(result) if result is not None else "No data returned."
-    except Exception as e:
-        return f"Tool execution error ({name}): {str(e)}"
+    # -- Single question mode
+    if args.question:
+        answer = run_question(
+            args.question,
+            session_id=session_id,
+            use_memory=use_memory,
+            verbose=args.verbose,
+        )
+        print(f"\n{answer}")
+        return
 
+    # -- Interactive mode
+    interactive_loop(session_id, use_memory, args.verbose)
 
-def _extract_text(response) -> str:
-    """Extract text content from LLM response."""
-    texts = [
-        block.text
-        for block in response.content
-        if hasattr(block, "text")
-    ]
-    return "\n".join(texts) if texts else "No text response generated."
-
-
-# ── Entry point for quick testing ──────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Quick smoke test
-    questions = [
-        "What was Apple's stock price performance in 2022?",
-        "What was the Fed funds rate during the 2022 rate hike cycle?",
-        "What was the macro environment like in mid-2022?",
-    ]
-
-    for q in questions[:1]:  # run first question only
-        answer = run(q, verbose=True)
+    main()

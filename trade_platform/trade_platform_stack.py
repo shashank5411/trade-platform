@@ -7,6 +7,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_s3 as s3,
     aws_s3_assets as s3_assets,
+    aws_s3vectors as s3vectors,    
     aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
@@ -104,7 +105,7 @@ class TradePlatformStack(Stack):
                         delete_behavior="LOG",
                     ),
                     recrawl_policy=glue.CfnCrawler.RecrawlPolicyProperty(
-                        recrawl_behavior="CRAWL_NEW_FOLDERS_ONLY",
+                        recrawl_behavior="CRAWL_EVERYTHING",
                     ),
                 )
                 crawler.add_dependency(glue_databases[layer][source])
@@ -122,6 +123,141 @@ class TradePlatformStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        # ── S3 Vectors bucket + index (Phase 5 — RAG vector store) ───────────
+        vectors_bucket = s3vectors.CfnVectorBucket(
+            self, "VectorsBucket",
+            vector_bucket_name=f"{env_name}-trade-vectors-{Aws.ACCOUNT_ID}",
+            # SSE-S3 (AES256) is the default — no encryption_configuration needed
+        )
+
+        # Vector index — one index for all document embeddings
+        # distance_metric: COSINE is standard for text embeddings
+        # dimensions: 1536 = Titan Embed Text v2 output size
+        vectors_index = s3vectors.CfnIndex(
+            self, "VectorsIndexV2",        # ← new logical ID
+            vector_bucket_name=f"{env_name}-trade-vectors-{Aws.ACCOUNT_ID}",
+            index_name="documents-index",  # ← keep same physical name
+            data_type="float32",
+            dimension=1024,
+            distance_metric="cosine",
+        )
+        vectors_index.add_dependency(vectors_bucket)
+
+        # ── LLMOps bucket (Phase 6 — agent telemetry) ─────────────────────────
+        llmops_bucket = s3.Bucket(
+            self, "LLMOpsBucket",
+            bucket_name=f"{env_name}-trade-llmops-{Aws.ACCOUNT_ID}",
+            versioned=False,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        llmops_bucket.grant_read(glue_role)
+
+        # Glue database for LLMOps Athena queries
+        llmops_db = glue.CfnDatabase(
+            self, "LLMOpsGlueDb",
+            catalog_id=self.account,
+            database_input=glue.CfnDatabase.DatabaseInputProperty(
+                name=f"{env_name}_trade_llmops",
+                description=f"[{env_name}] LLMOps telemetry — agent traces",
+            ),
+        )
+
+        # Crawler for LLMOps telemetry
+        llmops_crawler = glue.CfnCrawler(
+            self, "LLMOpsCrawler",
+            name=f"{env_name}-trade-llmops-crawler",
+            role=glue_role.role_arn,
+            database_name=f"{env_name}_trade_llmops",
+            targets=glue.CfnCrawler.TargetsProperty(
+                s3_targets=[
+                    glue.CfnCrawler.S3TargetProperty(
+                        path=f"s3://{env_name}-trade-llmops-{Aws.ACCOUNT_ID}/traces/",
+                    )
+                ]
+            ),
+            description=f"[{env_name}] Crawler for LLMOps telemetry",
+            schedule=glue.CfnCrawler.ScheduleProperty(
+                schedule_expression="cron(0 3 * * ? *)",
+            ),
+            schema_change_policy=glue.CfnCrawler.SchemaChangePolicyProperty(
+                update_behavior="LOG",
+                delete_behavior="LOG",
+            ),
+            recrawl_policy=glue.CfnCrawler.RecrawlPolicyProperty(
+                recrawl_behavior="CRAWL_EVERYTHING",
+            ),
+        )
+        llmops_crawler.add_dependency(llmops_db)
+
+        # ── SEC prose processed bucket (Phase 7) ──────────────────────────────
+        sec_prose_bucket = s3.Bucket(
+            self, "SecProseBucket",
+            bucket_name=f"{env_name}-trade-sec-prose-processed-{Aws.ACCOUNT_ID}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        sec_prose_bucket.grant_read(glue_role)
+
+        # Glue database for prose
+        sec_prose_db = glue.CfnDatabase(
+            self, "SecProseGlueDb",
+            catalog_id=self.account,
+            database_input=glue.CfnDatabase.DatabaseInputProperty(
+                name=f"{env_name}_trade_sec_prose_processed",
+                description=f"[{env_name}] SEC 10-K/10-Q prose sections for RAG",
+            ),
+        )
+
+        # Crawler for prose table
+        sec_prose_crawler = glue.CfnCrawler(
+            self, "SecProseCrawler",
+            name=f"{env_name}-trade-sec-prose-processed-crawler",
+            role=glue_role.role_arn,
+            database_name=f"{env_name}_trade_sec_prose_processed",
+            targets=glue.CfnCrawler.TargetsProperty(
+                s3_targets=[
+                    glue.CfnCrawler.S3TargetProperty(
+                        path=f"s3://{env_name}-trade-sec-prose-processed-{Aws.ACCOUNT_ID}/documents_prose/",
+                    )
+                ]
+            ),
+            description=f"[{env_name}] Crawler for SEC prose sections",
+            schedule=glue.CfnCrawler.ScheduleProperty(
+                schedule_expression="cron(0 3 * * ? *)",
+            ),
+            schema_change_policy=glue.CfnCrawler.SchemaChangePolicyProperty(
+                update_behavior="LOG",
+                delete_behavior="LOG",
+            ),
+            recrawl_policy=glue.CfnCrawler.RecrawlPolicyProperty(
+                recrawl_behavior="CRAWL_EVERYTHING",
+            ),
+        )
+        sec_prose_crawler.add_dependency(sec_prose_db)
+
+        # ── DynamoDB conversation memory table (Phase 5 — agent memory) ───────
+        conversation_table = dynamodb.Table(
+            self, "ConversationTable",
+            table_name=f"trade-platform-{env_name}-conversations",
+            partition_key=dynamodb.Attribute(
+                name="session_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="timestamp",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            time_to_live_attribute="ttl",
             removal_policy=RemovalPolicy.RETAIN,
         )
 
@@ -150,6 +286,48 @@ class TradePlatformStack(Stack):
                 bucket.grant_read_write(job_role)
         watermarks_table.grant_read_write_data(job_role)
         fred_secret.grant_read(job_role)
+        llmops_bucket.grant_read_write(job_role)
+        sec_prose_bucket.grant_read_write(job_role)
+
+        # ── Bedrock + S3 Vectors permissions for job_role (Phase 5) ──────────
+        job_role.add_to_policy(iam.PolicyStatement(
+            sid="BedrockEmbeddings",
+            effect=iam.Effect.ALLOW,
+            actions=["bedrock:InvokeModel"],
+            resources=[
+                "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0",
+                "arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3",
+                "arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-multilingual-v3",
+            ],
+        ))
+
+        job_role.add_to_policy(iam.PolicyStatement(
+            sid="BedrockHaikuFallback",
+            effect=iam.Effect.ALLOW,
+            actions=["bedrock:InvokeModel"],
+            resources=[
+                "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5",
+                "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001",
+            ],
+        ))
+
+        job_role.add_to_policy(iam.PolicyStatement(
+            sid="S3VectorsAccess",
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "s3vectors:PutVectors",
+                "s3vectors:GetVectors",
+                "s3vectors:DeleteVectors",
+                "s3vectors:QueryVectors",
+                "s3vectors:ListVectors",
+            ],
+            resources=[
+                f"arn:aws:s3vectors:{self.region}:{self.account}:bucket/{env_name}-trade-vectors-{Aws.ACCOUNT_ID}",
+                f"arn:aws:s3vectors:{self.region}:{self.account}:bucket/{env_name}-trade-vectors-{Aws.ACCOUNT_ID}/index/documents-index",
+            ],
+        ))
+
+        conversation_table.grant_read_write_data(job_role)
 
         # ── S3 assets — ingestion code uploaded at cdk deploy ─────────────────
         # Full ingestion dir → zipped by CDK, used as --extra-py-files so
@@ -168,13 +346,24 @@ class TradePlatformStack(Stack):
             script_assets[source] = asset
 
         # ── Glue Python Shell ingestion jobs ──────────────────────────────────
+    # Base modules for all jobs
         ADDITIONAL_MODULES = (
             "yfinance>=0.2.0,"
             "fredapi>=0.5.0,"
             "wbdata>=1.0.0,"
             "pyyaml>=6.0.0"
         )
-
+ 
+        # Per-source overrides — SEC needs edgartools for prose extraction
+        ADDITIONAL_MODULES_OVERRIDE = {
+            "sec": (
+                "yfinance>=0.2.0,"
+                "fredapi>=0.5.0,"
+                "wbdata>=1.0.0,"
+                "pyyaml>=6.0.0,"
+                "edgartools>=3.0.0"
+            ),
+        }
         JOB_SCHEDULES = {
             "yfinance":  "cron(0 21 ? * MON-FRI *)",   # weekdays after US close
             "fred":      "cron(0 6 1 * ? *)",            # 1st of each month
@@ -201,7 +390,9 @@ class TradePlatformStack(Stack):
                         f"s3://{ingestion_pkg.s3_bucket_name}"
                         f"/{ingestion_pkg.s3_object_key}"
                     ),
-                    "--additional-python-modules": ADDITIONAL_MODULES,
+                    "--additional-python-modules": ADDITIONAL_MODULES_OVERRIDE.get(
+                        source, ADDITIONAL_MODULES
+                    ),
                     "--ENVIRONMENT":               env_name,
                     "--FRED_SECRET_NAME":          fred_secret.secret_name,
                     "--job-language":              "python",

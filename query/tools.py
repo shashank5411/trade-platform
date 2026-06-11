@@ -346,7 +346,97 @@ TOOLS = [
             },
             "required": ["entity"]
         }
-    }
+    },
+
+    # ── PROSE TOOL ─────────────────────────────────────────────────────────
+
+    {
+        "name": "get_prose",
+        "description": (
+            "Fetch qualitative prose sections from SEC 10-K and 10-Q filings. "
+            "Use for: risk factors (item_1a), management discussion (item_7), "
+            "accounting policies (note_1), business descriptions (item_1), "
+            "market risk disclosures (item_7a), revenue segments (note_2), "
+            "debt details (note_3). "
+            "More targeted than semantic_search when you know the specific "
+            "section needed. Use semantic_search for cross-company or "
+            "concept-based retrieval."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity": {
+                    "type": "string",
+                    "description": "Company ticker e.g. AAPL, JPM"
+                },
+                "section_name": {
+                    "type": "string",
+                    "description": "Section to fetch",
+                    "enum": ["item_1", "item_1a", "item_7",
+                             "item_7a", "note_1", "note_2", "note_3"]
+                },
+                "form_type": {
+                    "type": "string",
+                    "description": "10-K or 10-Q",
+                    "enum": ["10-K", "10-Q"]
+                },
+                "start": {
+                    "type": "string",
+                    "description": "Start date YYYY-MM-DD"
+                },
+                "end": {
+                    "type": "string",
+                    "description": "End date YYYY-MM-DD"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of results (default 3)",
+                    "default": 3
+                },
+            },
+            "required": ["entity"]
+        }
+    },
+
+    # ── SEMANTIC SEARCH ────────────────────────────────────────────────────
+
+    {
+        "name": "semantic_search",
+        "description": (
+            "Semantic search over SEC EDGAR filings and Wikipedia articles. "
+            "Use for qualitative questions: company strategy, risk factors, "
+            "business descriptions, economic concepts, historical events. "
+            "Complements get_documents (which does exact entity lookup) by "
+            "finding relevant content across all documents by meaning. "
+            "Examples: 'Apple revenue recognition policy', "
+            "'quantitative easing effects on inflation', "
+            "'JPMorgan risk factors 2022'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language search query"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Number of results to return (default 5, max 20)",
+                    "default": 5
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Filter by source: EDGAR or WIKIPEDIA (optional)",
+                    "enum": ["EDGAR", "WIKIPEDIA"]
+                },
+                "entity": {
+                    "type": "string",
+                    "description": "Filter by entity/ticker e.g. AAPL, JPM (optional)"
+                },
+            },
+            "required": ["query"]
+        }
+    },
 ]
 
 
@@ -363,4 +453,6 @@ def get_registry():
         "get_indicator_on_date":   api.get_indicator_on_date,
         "get_macro_snapshot":      api.get_macro_snapshot,
         "get_documents":           api.get_documents,
+        "get_prose":               api.get_prose,
+        "semantic_search":         api.semantic_search,
     }

@@ -44,6 +44,31 @@ PROC_BUCKET = _bucket("yfinance", "processed")
 CONFIG_PATH = _arg("config_path",
     os.path.join(os.path.dirname(__file__), "..", "configs", "sources", "yfinance.yaml"))
 
+
+def _instrument_type(ticker: str) -> str:
+    """Classify ticker so ETL handles it correctly."""
+    if ticker.startswith("^"):
+        return "index"
+    elif ticker.endswith("=X"):
+        return "fx"
+    elif ticker.endswith("=F"):
+        return "futures"
+    else:
+        return "equity"
+    
+def _safe_partition_value(value: str) -> str:
+    """
+    Sanitize values for S3 partition paths.
+    Hive/Athena breaks on ^, =, special chars in partition paths.
+    Real value is preserved in Parquet data column.
+    ^GSPC → GSPC, CL=F → CL_F, BRK-B → BRK_B, DX-Y.NYB → DX_Y_NYB
+    """
+    return (value
+            .replace("^", "")
+            .replace("=", "_")
+            .replace("-", "_")
+            .replace(".", "_"))
+
 from utils.transform import (
     now_utc,
     safe_float,
@@ -55,29 +80,22 @@ s3 = boto3.client("s3", region_name="us-east-2")
 
 
 # ── Exchange metadata ──────────────────────────────────────────────────────
-# Extend when adding non-US tickers
-EXCHANGE_MAP = {
-    # Default US tickers → NASDAQ
-    # Override per-ticker in TICKER_EXCHANGE if needed
-    "DEFAULT": {"exchange": "NASDAQ", "country": "US", "currency": "USD"},
-    "NYSE":    {"exchange": "NYSE",   "country": "US", "currency": "USD"},
-    "NASDAQ":  {"exchange": "NASDAQ", "country": "US", "currency": "USD"},
-    "LSE":     {"exchange": "LSE",    "country": "GB", "currency": "GBp"},
-    "NSE":     {"exchange": "NSE",    "country": "IN", "currency": "INR"},
+EXCHANGE_NORMALIZE = {
+    "NYQ": "NYSE", "NYSEArca": "NYSE",
+    "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ",
+    "LSE": "LSE",
+    "NSI": "NSE",
 }
 
-# Known NYSE-listed tickers in your dev set
-# Everything else defaults to NASDAQ
-NYSE_TICKERS = {
-    "BAC", "BRK-B", "CVX", "GS", "JPM",
-    "JNJ", "MA", "PFE", "SPY", "UNH", "V", "WMT", "XOM"
+EXCHANGE_META = {
+    "NYSE":    {"country": "US", "currency": "USD"},
+    "NASDAQ":  {"country": "US", "currency": "USD"},
+    "INDEX":   {"country": "US", "currency": "USD"},
+    "FX":      {"country": "US", "currency": "FX"},
+    "FUTURES": {"country": "US", "currency": "USD"},
+    "LSE":     {"country": "GB", "currency": "GBp"},
+    "NSE":     {"country": "IN", "currency": "INR"},
 }
-
-
-def get_exchange_meta(ticker: str) -> dict:
-    if ticker.upper() in NYSE_TICKERS:
-        return EXCHANGE_MAP["NYSE"]
-    return EXCHANGE_MAP["DEFAULT"]
 
 
 # ── Config ─────────────────────────────────────────────────────────────────
@@ -127,17 +145,19 @@ def write_processed(rows: list) -> int:
     df["year"] = df["year"].astype(int)
     total      = 0
 
-    for (year, exchange, ticker), group in df.groupby(
-            ["year", "exchange", "ticker"]):
+    for (year, exchange), group in df.groupby(["year", "exchange"]):
         key = (f"market_prices/year={year}/"
-               f"exchange={exchange}/"
-               f"ticker={ticker}/"
-               f"data.parquet")
+                f"exchange={exchange}/"
+                f"data.parquet")
+        
 
         buf = BytesIO()
-        group.drop(columns=["year", "exchange", "ticker"]).to_parquet(
-            buf, index=False, engine="pyarrow", compression="snappy"
-        )
+        # Drop partition columns from path but keep ticker in data
+        # ticker in data = original value (^GSPC, EURUSD=X)
+        # ticker in path = sanitized (GSPC, EURUSD_X)
+        write_df = group.drop(columns=["year", "exchange"])
+        # ticker column already has original value from transform — keep it
+        write_df.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
         buf.seek(0)
         s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.getvalue())
         total += len(group)
@@ -180,28 +200,43 @@ def transform(records: list, config: dict) -> list:
                   f"for {ticker} — skipping")
             continue
 
-        meta     = get_exchange_meta(ticker)
-        volume   = rec.get("Volume")
+        instrument   = _instrument_type(ticker)
+        raw_exchange = rec.get("exchange", "")
+        if instrument == "index":
+            exchange = "INDEX"
+        elif instrument == "fx":
+            exchange = "FX"
+        elif instrument == "futures":
+            exchange = "FUTURES"
+        elif raw_exchange:
+            exchange = raw_exchange  # already normalized by ingest script
+        else:
+            exchange = "NASDAQ"  # fallback for old raw files without exchange field
+
+        meta      = EXCHANGE_META.get(exchange, EXCHANGE_META["NASDAQ"])
+        currency  = rec.get("currency") or meta["currency"]
+        volume    = rec.get("Volume")
         adj_close = safe_float(rec.get("Close"))
 
         row = {
             "ticker":      ticker,
-            "exchange":    meta["exchange"],
+            "exchange":    exchange,
             "date":        str(trade_date),
             "year":        trade_date.year,
-            "country":     meta["country"],
-            "currency":    meta["currency"],
+            "country":     "US"      if instrument in ("index", "futures", "fx")
+                           else meta["country"],
+            "currency":    currency,
             "open":        safe_float(rec.get("Open")),
             "high":        safe_float(rec.get("High")),
             "low":         safe_float(rec.get("Low")),
-            # yfinance Close = adjusted — raw close unavailable in this format
-            # Both fields populated with same value; raw close = adj_close here
             "close":       adj_close,
             "adj_close":   adj_close,
-            "volume":      int(volume) if volume is not None else None,
+            "volume": None if instrument == "fx"
+                      else float(volume) if volume is not None else None,
             "source":      "yfinance",
             "metadata":    to_json_str({
-                "adj_close_note": "close==adj_close; yfinance returns adjusted only"
+                "instrument_type":  instrument,
+                "adj_close_note":   "close==adj_close; yfinance returns adjusted only"
             }),
             "ingested_at": ingested_at,
         }

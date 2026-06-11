@@ -5,24 +5,59 @@ frequency: daily
 max_lookback_days: 30
 
 tickers:
-  - SPY
+  # Existing US equities
   - AAPL
   - MSFT
   - GOOGL
   - AMZN
-  - META
-  - NVDA
   - JPM
   - BAC
-  - GS
   - XOM
-  - CVX
-  - JNJ
-  - PFE
-  - WMT
-  - COST
+  - NVDA
+  - META
   - TSLA
   - BRK-B
-  - UNH
   - V
   - MA
+  - UNH
+  - JNJ
+  - WMT
+  - CVX
+  - COST
+  - GS
+  - PFE
+  - SPY
+
+  # US indices
+  - "^GSPC"    # S&P 500
+  - "^DJI"     # Dow Jones
+  - "^IXIC"    # NASDAQ Composite
+  - "^RUT"     # Russell 2000 (small caps)
+  - "^VIX"     # Volatility index — fear gauge
+
+  # European indices
+  - "^FTSE"    # FTSE 100 UK
+  - "^GDAXI"   # DAX Germany
+  - "^FCHI"    # CAC 40 France
+  - "^STOXX50E" # Euro Stoxx 50
+
+  # Asia Pacific
+  - "^N225"    # Nikkei 225 Japan
+  - "^HSI"     # Hang Seng Hong Kong
+  - "^NSEI"    # Nifty 50 India
+  - "^AXJO"    # ASX 200 Australia
+  - "^KS11"    # KOSPI South Korea
+
+  # Commodities (futures)
+  - "GC=F"     # Gold futures
+  - "CL=F"     # Crude oil WTI futures
+  - "SI=F"     # Silver futures
+  - "NG=F"     # Natural gas futures
+
+  # FX / Dollar
+  - "DX-Y.NYB" # DXY — US Dollar Index
+  - "EURUSD=X"  # EUR/USD
+  - "GBPUSD=X"  # GBP/USD
+  - "USDJPY=X"  # USD/JPY
+  - "USDINR=X"  # USD/INR
+  - "USDCNY=X"  # USD/CNY

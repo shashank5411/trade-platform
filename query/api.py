@@ -8,11 +8,14 @@ Tools:
   MACRO:      get_macro_snapshot (wrapper around get_indicator_on_date + SPY)
 """
 
+import json
 import os
 import sys
+import boto3
 import pandas as pd
 from datetime import date, timedelta
 from typing import Optional
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from query.athena import query, AthenaError
@@ -27,7 +30,18 @@ DB = {
     "yfinance":  f"{ENV}_trade_yfinance_processed",
     "wikipedia": f"{ENV}_trade_wikipedia_processed",
     "sec":       f"{ENV}_trade_sec_processed",
+    "sec_prose": f"{ENV}_trade_sec_prose_processed",
 }
+
+# ── Vector search ──────────────────────────────────────────────────────────
+VECTOR_BUCKET  = f"{ENV}-trade-vectors-{ACCOUNT}"
+VECTOR_INDEX   = "documents-index"
+BEDROCK_REGION = "us-east-1"
+EMBED_MODEL_ID = "cohere.embed-english-v3"
+EMBED_DIM      = 1024
+
+_bedrock   = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+_s3vectors = boto3.client("s3vectors",       region_name="us-east-2")
 
 # ── Default macro indicators ───────────────────────────────────────────────
 DEFAULT_MACRO = [
@@ -38,6 +52,9 @@ DEFAULT_MACRO = [
     ("DGS2",     "FRED",      None),
     ("GDP",      "FRED",      None),
     ("NY.GDP.MKTP.CD", "WORLDBANK", "US"),
+    ("^VIX", "yfinance_index", None),  # Fear gauge
+    ("DX-Y.NYB", "yfinance_fx", None), # Dollar strength
+    ("GC=F", "yfinance_futures", None), # Gold
 ]
 
 
@@ -58,6 +75,26 @@ def _price_granularity(start: str, end: str) -> str:
     else:
         return "monthly"
 
+import time
+
+def embed_chunks(chunks: list) -> list:
+    embedded = []
+    total    = len(chunks)
+
+    for i, chunk in enumerate(chunks):
+        vector = embed_text(chunk["text"])
+        if vector is not None:
+            chunk["vector"] = vector
+            embedded.append(chunk)
+
+        # Rate limiting — 2 req/sec safely under Titan default quota
+        time.sleep(0.5)
+
+        if (i + 1) % 25 == 0 or (i + 1) == total:
+            pct = int((i + 1) / total * 100)
+            print(f"  Embedded {i+1}/{total} chunks ({pct}%)")
+
+    return embedded
 
 def _indicator_granularity(start: str, end: str,
                             native_freq: str = "monthly") -> str:
@@ -575,23 +612,20 @@ def get_indicator_on_date(
 # MACRO SHORTCUT
 # ══════════════════════════════════════════════════════════════════════════
 
-def get_macro_snapshot(
-    as_of_date:  str,
-    indicators:  Optional[list] = None
-) -> str:
-    """
-    Cross-source macro snapshot as of a date.
-    Thin wrapper around get_indicator_on_date + SPY price.
-    """
-    indicator_list = indicators or DEFAULT_MACRO
-    series_ids     = [i[0] for i in indicator_list]
-    countries      = [i[2] for i in indicator_list]
+def get_macro_snapshot(as_of_date: str) -> str:
+    macro = get_indicator_on_date(
+        [s[0] for s in DEFAULT_MACRO],
+        as_of_date,
+        countries=[s[2] for s in DEFAULT_MACRO],
+    )
 
-    result = get_indicator_on_date(series_ids, as_of_date, countries)
+    # New — market-based macro signals
+    market_signals = get_prices_on_date(
+        ["SPY", "^VIX", "DX-Y.NYB", "GC=F", "CL=F"],
+        as_of_date
+    )
 
-    # Append SPY as equity market proxy
-    spy = get_price_on_date("SPY", as_of_date)
-    return f"{result}\n\nEquity proxy:\n{spy}"
+    return f"{macro}\n\nMarket signals:\n{market_signals}"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -612,7 +646,7 @@ def get_documents(
     """
     entity          = entity.upper() if not entity[0].islower() else entity
     source_filter   = f"AND source = '{source}'"    if source   else ""
-    doc_type_filter = f"AND doc_type = '{doc_type}'" if doc_type else ""
+    doc_type_filter = f"AND form_type = '{doc_type}'" if doc_type else ""
     date_filters    = ""
     year_filter     = ""
 
@@ -631,7 +665,7 @@ def get_documents(
     for db in databases:
         sql = f"""
             SELECT doc_id, source, title, entity,
-                   doc_type, doc_date, char_count, text
+                   form_type as doc_type, doc_date, char_count, text
             FROM   documents
             WHERE  entity = '{entity}'
               {source_filter}
@@ -663,3 +697,163 @@ def get_documents(
             f"{str(row['text'])[:2000]}"
         )
     return "\n\n".join(output)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PROSE TOOL
+# ══════════════════════════════════════════════════════════════════════════
+
+def get_prose(
+    entity:       str,
+    section_name: Optional[str] = None,
+    form_type:    Optional[str] = None,
+    start:        Optional[str] = None,
+    end:          Optional[str] = None,
+    limit:        int = 3,
+) -> str:
+    """
+    Fetch prose sections from 10-K/10-Q filings.
+    Use for qualitative questions: risk factors, MD&A,
+    accounting policies, business descriptions.
+
+    section_name options:
+      item_1   — Business description
+      item_1a  — Risk factors
+      item_7   — MD&A
+      item_7a  — Market risk
+      note_1   — Accounting policies
+      note_2   — Revenue segments
+      note_3   — Debt details
+    """
+    entity         = entity.upper()
+    section_filter = (f"AND section_name = '{section_name}'"
+                      if section_name else "")
+    form_filter    = (f"AND form_type = '{form_type.replace('-', '')}'"
+                      if form_type else "")
+    year_filter    = ""
+    date_filter    = ""
+
+    if start and end:
+        sy          = int(start[:4])
+        ey          = int(end[:4])
+        year_filter = f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
+        date_filter = f"AND filed_date BETWEEN '{start}' AND '{end}'"
+
+    sql = f"""
+        SELECT doc_id, entity, form_type, filed_date,
+               section_name, section_title,
+               text, char_count, extraction_method
+        FROM   documents_prose
+        WHERE  entity = '{entity}'
+          {section_filter}
+          {form_filter}
+          {year_filter}
+          {date_filter}
+        ORDER BY filed_date DESC
+        LIMIT  {limit}
+    """
+
+    try:
+        df = query(sql, DB["sec_prose"])
+        if df.empty:
+            return f"No prose sections found for '{entity}'."
+
+        output = []
+        for _, row in df.iterrows():
+            output.append(
+                f"=== {row['section_title']} "
+                f"({row['form_type']} | {row['filed_date']}) ===\n"
+                f"Entity: {row['entity']} | "
+                f"Section: {row['section_name']} | "
+                f"Extraction: {row['extraction_method']}\n\n"
+                f"{str(row['text'])[:20000]}"
+            )
+        return "\n\n".join(output)
+
+    except AthenaError as e:
+        return f"Error fetching prose for {entity}: {e}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SEMANTIC SEARCH
+# ══════════════════════════════════════════════════════════════════════════
+def semantic_search(
+    query:  str,
+    top_k:  int = 5,
+    source: Optional[str] = None,
+    entity: Optional[str] = None,
+) -> str:
+    """
+    Semantic search over SEC filings and Wikipedia articles.
+    Embeds query with Cohere v3, queries S3 Vectors index, returns top-K chunks.
+    Filters applied in Python after retrieval (S3 Vectors filter syntax varies).
+    """
+    # 1. Embed the query
+    try:
+        body = json.dumps({
+            "texts":           [query[:2000]],
+            "input_type":      "search_query",
+            "embedding_types": ["float"],
+        })
+        resp   = _bedrock.invoke_model(
+            modelId=EMBED_MODEL_ID,
+            body=body,
+            contentType="application/json",
+            accept="application/json",
+        )
+        vector = json.loads(resp["body"].read())["embeddings"]["float"][0]
+    except Exception as e:
+        return f"Embedding error: {e}"
+
+    # 2. Query S3 Vectors — fetch more if filtering, trim after
+    fetch_k = top_k * 3 if (source or entity) else top_k
+    try:
+        result  = _s3vectors.query_vectors(
+            vectorBucketName=VECTOR_BUCKET,
+            indexName=VECTOR_INDEX,
+            queryVector={"float32": vector},
+            topK=fetch_k,
+            returnMetadata=True,
+            returnDistance=True,
+        )
+        matches = result.get("vectors", [])
+    except Exception as e:
+        if "empty" in str(e).lower() or "ResourceNotFoundException" in str(e):
+            return (
+                "Vector index is not yet populated. "
+                "Run etl_embed.py to embed documents first."
+            )
+        return f"Vector search error: {e}"
+
+    # 3. Filter in Python
+    if source:
+        matches = [m for m in matches
+                   if m.get("metadata", {}).get("source", "").upper()
+                   == source.upper()]
+    if entity:
+        matches = [m for m in matches
+                   if m.get("metadata", {}).get("entity", "").upper()
+                   == entity.upper()]
+
+    matches = matches[:top_k]
+
+    if not matches:
+        return f"No relevant documents found for: {query}"
+
+    # 4. Format results
+    lines = [
+        f"Semantic search: '{query}'",
+        f"Top {len(matches)} results:\n"
+    ]
+    for i, match in enumerate(matches, 1):
+        meta  = match.get("metadata", {})
+        distance = match.get("distance", 0)
+        lines.append(
+            f"[{i}] {meta.get('title', 'Unknown')} "
+            f"({meta.get('source', '')} | {meta.get('doc_date', '')})\n"
+            f"    Entity: {meta.get('entity', '')} | "
+            f"Distance: {distance:.4f} (lower=more similar)\n"
+            f"    {meta.get('text', '')[:300]}\n"
+        )
+
+    return "\n".join(lines)

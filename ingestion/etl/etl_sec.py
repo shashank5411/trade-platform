@@ -16,6 +16,7 @@ Strategy:
 - Store as documents table rows — one row per filing
 - text field = human-readable financial summary for RAG
 """
+import gzip
 
 import os
 import sys
@@ -29,7 +30,10 @@ from io import BytesIO
 # ── Path setup ─────────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, "/tmp/ingestion")
-
+from utils.watermark import (
+    load_sec_tracker, save_sec_tracker,
+    get_new_accessions, mark_accessions_done,
+)
 def _arg(key, default=None):
     import argparse
     parser = argparse.ArgumentParser()
@@ -110,29 +114,50 @@ def load_config() -> dict:
 # ── S3 helpers ─────────────────────────────────────────────────────────────
 
 def list_raw_keys() -> list:
-    """List all per-ticker raw files under year= prefix."""
+    """Return one latest file per ticker from latest/ prefix."""
     paginator = s3.get_paginator("list_objects_v2")
     keys = []
-    for page in paginator.paginate(Bucket=RAW_BUCKET):
+    for page in paginator.paginate(Bucket=RAW_BUCKET, Prefix="latest/"):
         keys.extend([o["Key"] for o in page.get("Contents", [])])
-    keys = [k for k in keys if k.startswith("year=")]
+    keys = [k for k in keys
+            if k.endswith(".json") or k.endswith(".json.gz")]
+    print(f"  Latest files: {[k.split('/')[-1] for k in keys]}")
     return keys
 
 
 def read_raw_file(key: str) -> dict:
+    import gzip
     obj = s3.get_object(Bucket=RAW_BUCKET, Key=key)
-    return json.loads(obj["Body"].read())
+    raw = obj["Body"].read()
+    compressed_mb = len(raw) / 1024 / 1024
+    if key.endswith(".gz"):
+        raw = gzip.decompress(raw)
+        decompressed_mb = len(raw) / 1024 / 1024
+        print(f"  [{key.split('/')[-1]}] "
+              f"compressed: {compressed_mb:.1f}MB  "
+              f"decompressed: {decompressed_mb:.1f}MB  "
+              f"ratio: {decompressed_mb/compressed_mb:.1f}x")
+    else:
+        print(f"  [{key.split('/')[-1]}] size: {compressed_mb:.1f}MB")
+    return json.loads(raw)
 
 
 def write_processed(rows: list) -> int:
-    """Write canonical rows partitioned by source= / year= / form_type="""
+    """Append new rows to existing Parquet, deduplicating on doc_id."""
     if not rows:
         print("  No rows to write")
         return 0
 
     df         = pd.DataFrame(rows)
     df["year"] = df["year"].astype(int)
-    total      = 0
+
+    # Dedup within this batch first
+    before = len(df)
+    df = df.drop_duplicates(subset=["doc_id"], keep="last")
+    if len(df) < before:
+        print(f"  Deduped {before - len(df)} duplicate rows in batch")
+
+    total = 0
 
     for (year, doc_type), group in df.groupby(["year", "doc_type"]):
         safe_type = doc_type.replace("-", "").replace("/", "")
@@ -141,14 +166,29 @@ def write_processed(rows: list) -> int:
                f"form_type={safe_type}/"
                f"data.parquet")
 
+        new_df = group.drop(columns=["year", "source", "doc_type"])
+
+        # Read existing Parquet and merge if present
+        try:
+            obj         = s3.get_object(Bucket=PROC_BUCKET, Key=key)
+            existing_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+            existing_ids = set(existing_df["doc_id"].tolist())
+            new_df = new_df[~new_df["doc_id"].isin(existing_ids)]
+            if new_df.empty:
+                print(f"  No new rows for year={year} {doc_type} — skipping")
+                continue
+            combined = pd.concat([existing_df, new_df], ignore_index=True)
+            print(f"  Appending {len(new_df)} rows to {len(existing_df)} "
+                  f"existing → year={year} {doc_type}")
+        except s3.exceptions.NoSuchKey:
+            combined = new_df
+            print(f"  Writing {len(combined)} rows → year={year} {doc_type}")
+
         buf = BytesIO()
-        group.drop(columns=["year", "source", "doc_type"]).to_parquet(
-            buf, index=False, engine="pyarrow", compression="snappy"
-        )
+        combined.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
         buf.seek(0)
         s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.getvalue())
-        total += len(group)
-        print(f"  Wrote {len(group)} rows → s3://{PROC_BUCKET}/{key}")
+        total += len(new_df)
 
     return total
 
@@ -212,10 +252,10 @@ def build_financial_narrative(company_name: str, ticker: str,
 
 # ── Transform ──────────────────────────────────────────────────────────────
 
-def transform_company(raw: dict) -> list:
+def transform_company(raw: dict, tracker: dict) -> tuple:
     """
     Transform one company's EDGAR data into canonical document rows.
-    One row per 10-K or 10-Q filing.
+    Returns (rows, new_accessions_processed).
     """
     ingested_at  = now_utc()
     ticker       = raw.get("ticker", "").upper()
@@ -226,17 +266,21 @@ def transform_company(raw: dict) -> list:
     sic_code     = submissions.get("sic", "")
     exchange     = (submissions.get("exchanges") or [""])[0]
 
-    # Get us-gaap facts
     facts_usgaap = (raw.get("facts", {})
                        .get("facts", {})
                        .get("us-gaap", {}))
 
-    # Get filing index
-    recent     = submissions.get("filings", {}).get("recent", {})
-    accessions = recent.get("accessionNumber", [])
-    forms      = recent.get("form", [])
-    dates      = recent.get("filingDate", [])
+    recent       = submissions.get("filings", {}).get("recent", {})
+    accessions   = recent.get("accessionNumber", [])
+    forms        = recent.get("form", [])
+    dates        = recent.get("filingDate", [])
     report_dates = recent.get("reportDate", [])
+
+    # Get only accessions not yet transformed
+    all_target = [a for a, f in zip(accessions, forms) if f in TARGET_FORMS]
+    new_accns  = set(get_new_accessions(
+        tracker, "transformed_accessions", all_target
+    ))
 
     rows    = []
     skipped = 0
@@ -246,29 +290,25 @@ def transform_company(raw: dict) -> list:
 
         if form not in TARGET_FORMS:
             continue
+        if accn not in new_accns:
+            continue  # already transformed
 
         try:
             filed_date = date.fromisoformat(filed)
         except (ValueError, TypeError):
             continue
 
-        # Extract key financial metrics for this filing
         metrics = {}
         for concept, label, unit, divisor, scale_label in KEY_CONCEPTS:
             val = get_concept_value(facts_usgaap, concept, accn, form)
-            # Only add first match per label (handles concept aliases)
             if val is not None and label not in metrics:
                 metrics[label] = (label, val / divisor, scale_label)
 
-        # Get fiscal period info from any matched value
-        fp  = "FY" if form == "10-K" else reported
+        fp     = "FY" if form == "10-K" else reported
         fy_val = filed_date.year
-
-        # Build narrative text
-        text = build_financial_narrative(
+        text   = build_financial_narrative(
             company_name, ticker, form, fp, fy_val, metrics
         )
-
         doc_id = make_doc_id("EDGAR", accn)
         title  = f"{company_name} {form} {filed_date.year}"
 
@@ -303,9 +343,9 @@ def transform_company(raw: dict) -> list:
 
         rows.append(row)
 
-    print(f"  {ticker}: {len(rows)} filings extracted "
-          f"({skipped} skipped)")
-    return rows
+    print(f"  {ticker}: {len(rows)} new filings extracted "
+          f"({skipped} skipped, {len(all_target) - len(new_accns)} already done)")
+    return rows, list(new_accns)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
@@ -315,17 +355,18 @@ def main():
     print(f"  raw:       s3://{RAW_BUCKET}")
     print(f"  processed: s3://{PROC_BUCKET}")
 
-    config  = load_config()
+    config    = load_config()
     companies = config.get("companies", {})
     print(f"  Companies: {list(companies.keys())}")
+
     keys = list_raw_keys()
-    print(f"  Found {len(keys)} raw files\n")
+    print(f"  Found {len(keys)} latest files\n")
 
     all_rows    = []
+    all_updates = {}   # ticker → new_accns to mark done after write
     total_files = 0
 
     for key in sorted(keys):
-        # Extract ticker from filename: sec_AAPL_20260531T222040Z.json
         filename = key.split("/")[-1]
         try:
             ticker = filename.split("_")[1]
@@ -334,15 +375,30 @@ def main():
 
         print(f"Processing {ticker}...")
         try:
+            tracker = load_sec_tracker(s3, RAW_BUCKET, ticker)
+            print(f"  Tracker: {tracker['total_transformed']} "
+                  f"accessions previously transformed")
+
             raw  = read_raw_file(key)
-            rows = transform_company(raw)
+            rows, new_accns = transform_company(raw, tracker)
             all_rows.extend(rows)
+            all_updates[ticker] = (tracker, new_accns)
             total_files += 1
         except Exception as e:
             print(f"  ERROR: {ticker} failed — {e}")
             continue
 
     total_written = write_processed(all_rows)
+
+    # Update trackers only after successful write
+    for ticker, (tracker, new_accns) in all_updates.items():
+        if new_accns:
+            tracker = mark_accessions_done(
+                tracker, "transformed_accessions",
+                "total_transformed", new_accns
+            )
+            tracker["last_etl"] = now_utc()
+            save_sec_tracker(s3, RAW_BUCKET, ticker, tracker)
 
     print(f"\n{'─'*50}")
     print(f"Done. {total_files} companies processed, "
