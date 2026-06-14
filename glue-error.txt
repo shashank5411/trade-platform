@@ -1,0 +1,8 @@
+﻿aws : 
+At line:1 char:1
++ aws logs get-log-events --log-group-name "/aws-glue/jobs/error" --log ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+aws: [ERROR]: 'charmap' codec can't encode characters in position 5076-5115: character maps to <undefined>

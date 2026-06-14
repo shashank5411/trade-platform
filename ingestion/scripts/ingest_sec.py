@@ -4,6 +4,23 @@ Dataset: per-company watermarks | Frequency: quarterly
 Note: SEC FAIR ACCESS policy — max 10 req/sec, User-Agent required.
       Company facts JSON can be 10-50 MB per company.
 """
+import sys
+import os
+import zipfile
+
+# Glue puts --extra-py-files zip in glue-python-libs-* but doesn't extract it
+# Extract it ourselves so utils/ is importable
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                _zip_path = os.path.join(_libs_dir, _f)
+                with zipfile.ZipFile(_zip_path) as _z:
+                    _z.extractall(_libs_dir)
+                sys.path.insert(0, _libs_dir)
+        break
 import argparse
 import json
 import os
@@ -11,9 +28,6 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.watermark import get_watermark, update_watermark, \
     load_sec_tracker, save_sec_tracker, get_new_accessions, mark_accessions_done
 
@@ -21,57 +35,32 @@ import boto3
 import gzip
 import pandas as pd
 import requests
-from edgar import Company as EdgarCompany, set_identity
 from utils.config import get_default_start, load_source_config
 from utils.dates import current_date_str, subtract_days
-from utils.watermark import get_watermark, update_watermark
 
 
 def _arg(name: str, default: str = "") -> str:
-    for i, a in enumerate(sys.argv[1:], 1):
-        if a == f"--{name}" and i < len(sys.argv):
-            return sys.argv[i]
+    for i, a in enumerate(sys.argv):
+        if a == f"--{name}" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
     return os.getenv(name, default)
-
 
 SOURCE = "sec"
 
 ENV        = _arg("ENVIRONMENT", "dev")
 ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 BUCKET     = f"{ENV}-trade-{SOURCE}-raw-{ACCOUNT_ID}"
-S3         = boto3.client("s3")
+S3         = boto3.client("s3", region_name="us-east-2")
 
 HEADERS   = {"User-Agent": "TradePlatform research@example.com"}
 REQ_DELAY = 0.15    # ~6 req/sec — safely under EDGAR 10 req/sec limit
-
-# edgartools also talks to EDGAR — use same identity
-set_identity("TradePlatform research@example.com")
-
-# 10-K sections: attribute name on TenK object
-TENK_SECTIONS = {
-    "item_1":   "business",
-    "item_1a":  "risk_factors",
-    "item_7":   "management_discussion",
-}
-
-# 10-Q sections: key into TenQ["..."]
-TENQ_SECTIONS = {
-    "item_2":   "part_i_item_2",    # MD&A
-    "item_1a":  "part_ii_item_1a",  # Risk Factors
-}
-
-# Prose retention window
-PROSE_CUTOFF = {
-    "dev":  {"10-K": "2023-01-01", "10-Q": "2025-01-01"},
-    "prod": {"10-K": "2019-01-01", "10-Q": "2023-01-01"},
-}
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Ingest SEC EDGAR company filings")
     p.add_argument("--start-date", help="Start date YYYY-MM-DD")
     p.add_argument("--end-date",   help="End date   YYYY-MM-DD")
-    return p.parse_args()
+    return p.parse_known_args()[0]
 
 
 def _resolve_start(tickers: list, config: dict, args) -> str:
@@ -84,12 +73,6 @@ def _resolve_start(tickers: list, config: dict, args) -> str:
     oldest = min(w["last_ingested_period"] for w in live)
     return subtract_days(oldest, config.get("max_lookback_days", 90))
 
-
-def _is_within_prose_window(filed_date: str, form_type: str) -> bool:
-    cutoffs = PROSE_CUTOFF.get(ENV, PROSE_CUTOFF["dev"])
-    ft      = "10-K" if "10-K" in form_type else "10-Q"
-    cutoff  = cutoffs.get(ft, "2020-01-01")
-    return filed_date >= cutoff
 
 
 def fetch_with_retry(url: str, max_attempts: int = 3) -> dict:
@@ -131,117 +114,50 @@ def fetch_submissions(cik_padded: str) -> dict:
     return data
 
 
-def fetch_prose_sections(ticker: str, accession_no: str,
-                         form_type: str) -> dict:
-    """
-    Use edgartools to extract clean prose sections from a 10-K or 10-Q.
-    Returns dict of {section_name: text} — empty dict on any failure.
-    """
-    try:
-        company = EdgarCompany(ticker)
-
-        # Find the specific filing by accession number
-        form    = "10-K" if "10-K" in form_type else "10-Q"
-        filings = company.get_filings(form=form)
-
-        filing = None
-        for f in filings:
-            if f.accession_no == accession_no:
-                filing = f
-                break
-
-        if filing is None:
-            print(f"    WARN: accession {accession_no} not found via edgartools")
-            return {}
-
-        doc      = filing.obj()
-        sections = {}
-
-        if form == "10-K":
-            for section_name, attr in TENK_SECTIONS.items():
-                try:
-                    text = getattr(doc, attr, None)
-                    if text:
-                        sections[section_name] = str(text)
-                        print(f"    Got {section_name}: "
-                              f"{len(str(text))//1024}KB")
-                    else:
-                        print(f"    WARN: {section_name} ({attr}) is empty")
-                except Exception as e:
-                    print(f"    WARN: failed to get {section_name}: {e}")
-
-        else:  # 10-Q
-            for section_name, key in TENQ_SECTIONS.items():
-                try:
-                    text = doc[key]
-                    if text:
-                        sections[section_name] = str(text)
-                        print(f"    Got {section_name}: "
-                              f"{len(str(text))//1024}KB")
-                    else:
-                        print(f"    WARN: {section_name} ({key}) is empty")
-                except Exception as e:
-                    print(f"    WARN: failed to get {section_name}: {e}")
-
-        return sections
-
-    except Exception as e:
-        print(f"    WARN: edgartools failed for {accession_no}: {e}")
-        return {}
-
 
 def fetch_company(cik: str, ticker: str, tracker: dict) -> tuple:
-    """Fetch submissions, facts, and prose sections via edgartools."""
+    """Fetch submissions and facts from EDGAR."""
     cik_padded  = cik.zfill(10)
     submissions = fetch_submissions(cik_padded)
-    facts       = fetch_with_retry(
-        f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_padded}.json"
-    )
+    # Fetch facts with size guard — large banks (JPM, BAC) have 15-37MB facts
+    # which exceeds Python Shell memory limits. Skip facts for oversized companies.
+    FACTS_SIZE_LIMIT_MB = 12
+    facts_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_padded}.json"
+    try:
+        import urllib.request
+        req = urllib.request.Request(facts_url, headers=HEADERS, method="HEAD")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content_length = int(resp.headers.get("Content-Length", 0))
+            size_mb = content_length / 1024 / 1024
+            if size_mb > FACTS_SIZE_LIMIT_MB:
+                print(f"    Skipping facts for {ticker} — "
+                      f"{size_mb:.1f}MB exceeds {FACTS_SIZE_LIMIT_MB}MB limit")
+                facts = {}
+            else:
+                facts = fetch_with_retry(facts_url)
+    except Exception:
+        # HEAD not supported — fetch normally and handle OOM via Python Shell limits
+        facts = fetch_with_retry(facts_url)
 
     recent     = submissions.get("filings", {}).get("recent", {})
     accessions = recent.get("accessionNumber", [])
     forms      = recent.get("form", [])
-    dates      = recent.get("filingDate", [])
 
     all_target_accns = [
-        accn for accn, form, filed in zip(accessions, forms, dates)
+        accn for accn, form in zip(accessions, forms)
         if form in ("10-K", "10-Q")
-        and _is_within_prose_window(filed, form)
     ]
     new_accns = get_new_accessions(
         tracker, "fetched_accessions", all_target_accns
     )
 
-    filing_docs = {}
-    for accn, form, filed in zip(accessions, forms, dates):
-        if form not in ("10-K", "10-Q"):
-            continue
-        if not _is_within_prose_window(filed, form):
-            continue
-        if accn not in new_accns:
-            print(f"    Skipping {accn} — already fetched")
-            continue
-
-        print(f"    Fetching {form} prose {accn} ({filed})...")
-        sections = fetch_prose_sections(ticker, accn, form)
-
-        if sections:
-            filing_docs[accn] = {
-                "form":     form,
-                "filed":    filed,
-                "sections": sections,   # dict of {section_name: text}
-            }
-            print(f"    Got {len(sections)} sections for {accn}")
-        else:
-            print(f"    WARN: no sections extracted for {accn}")
-
-    return submissions, facts, filing_docs, new_accns
+    return submissions, facts, new_accns
 
 
 def upload_company(ticker: str, data: dict,
-                   filing_docs: dict, timestamp: str,
+                   timestamp: str,
                    tracker: dict, new_accns: list) -> str:
-    """Upload company data and filing documents to S3."""
+    """Upload company data to S3."""
     year, month = timestamp[:4], timestamp[4:6]
 
     # Main payload (submissions + facts)
@@ -258,26 +174,6 @@ def upload_company(ticker: str, data: dict,
     latest_key = f"latest/{SOURCE}_{ticker}_latest.json.gz"
     S3.put_object(Bucket=BUCKET, Key=latest_key, Body=body,
                   ContentType="application/json", ContentEncoding="gzip")
-
-    # Upload prose sections (one file per filing, sections nested inside)
-    docs_uploaded = 0
-    for accn, doc_info in filing_docs.items():
-        doc_body = gzip.compress(
-            json.dumps({
-                "ticker":    ticker,
-                "accession": accn,
-                "form":      doc_info["form"],
-                "filed":     doc_info["filed"],
-                "sections":  doc_info["sections"],  # {section_name: text}
-            }, default=str).encode()
-        )
-        doc_key = (f"year={year}/month={month}/prose/"
-                   f"{SOURCE}_{ticker}_{accn}_{timestamp}.json.gz")
-        S3.put_object(Bucket=BUCKET, Key=doc_key, Body=doc_body,
-                      ContentType="application/json", ContentEncoding="gzip")
-        docs_uploaded += 1
-
-    print(f"    Uploaded {docs_uploaded} new prose filings")
 
     # Update tracker
     tracker = mark_accessions_done(
@@ -319,7 +215,7 @@ def main():
             print(f"  Tracker: {tracker['total_fetched']} accessions "
                   f"previously fetched")
 
-            submissions, facts, filing_docs, new_accns = fetch_company(
+            submissions, facts, new_accns = fetch_company(
                 cik, ticker, tracker
             )
             payload = {
@@ -329,7 +225,7 @@ def main():
                 "facts":       facts,
             }
             key = upload_company(
-                ticker, payload, filing_docs, timestamp, tracker, new_accns
+                ticker, payload, timestamp, tracker, new_accns
             )
             print(f"    Uploaded → s3://{BUCKET}/{key}")
 
@@ -340,7 +236,6 @@ def main():
                 "ticker":          ticker,
                 "recent_filings":  filing_cnt,
                 "fact_namespaces": len(fact_ns),
-                "prose_docs":      len(filing_docs),
             })
             update_watermark(SOURCE, ticker, end_date, "success", filing_cnt)
 
@@ -350,7 +245,6 @@ def main():
                 "ticker":          ticker,
                 "recent_filings":  None,
                 "fact_namespaces": None,
-                "prose_docs":      None,
             })
             update_watermark(SOURCE, ticker, end_date, "error", 0)
 

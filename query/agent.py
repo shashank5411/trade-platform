@@ -15,10 +15,6 @@ from query.orchestrator import run as orchestrate
 ENV = os.environ.get("ENV", "dev")
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import anthropic
-import os; get_anthropic_key = lambda: os.environ["ANTHROPIC_API_KEY"]
-
-client = anthropic.Anthropic(api_key=get_anthropic_key())
 
 def parse_args():
     p = argparse.ArgumentParser(

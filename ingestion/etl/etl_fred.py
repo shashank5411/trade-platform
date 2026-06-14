@@ -10,6 +10,22 @@ Revision-only append pattern:
 - Only writes a new row when value actually changed
 - Preserves all historical vintages
 """
+import sys
+import os
+import zipfile
+
+# Glue places --extra-py-files zip in glue-python-libs-* but does not extract it
+# Extract it manually so internal packages like utils/ are importable
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                with zipfile.ZipFile(os.path.join(_libs_dir, _f)) as _z:
+                    _z.extractall(_libs_dir)
+        sys.path.insert(0, _libs_dir)
+        break
 
 import os
 import sys
@@ -20,7 +36,7 @@ from datetime import date, datetime, timezone
 from io import BytesIO
 
 # ── Path setup — works both locally and in Glue ────────────────────────────
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, _libs_dir)
 sys.path.insert(0, "/tmp/ingestion")
 
 # ── Arg handling — works locally and in Glue Python Shell ─────────────────

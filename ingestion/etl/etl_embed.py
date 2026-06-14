@@ -15,6 +15,22 @@ Writes vectors to S3 Vectors index: documents-index.
 
 Run after etl_sec.py, etl_wikipedia.py, and etl_sec_prose.py.
 """
+import sys
+import os
+import zipfile
+
+# Glue places --extra-py-files zip in glue-python-libs-* but does not extract it
+# Extract it manually so internal packages like utils/ are importable
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                with zipfile.ZipFile(os.path.join(_libs_dir, _f)) as _z:
+                    _z.extractall(_libs_dir)
+        sys.path.insert(0, _libs_dir)
+        break
 
 import os
 import sys
@@ -28,7 +44,7 @@ import time
 
 from botocore.config import Config
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, _libs_dir)
 sys.path.insert(0, "/tmp/ingestion")
 
 def _arg(key, default=None):
@@ -375,11 +391,28 @@ def write_vectors(chunks: list, doc_metadata: dict) -> int:
                 },
             })
 
-        s3vectors.put_vectors(
-            vectorBucketName=VECTOR_BUCKET,
-            indexName=VECTOR_INDEX,
-            vectors=vectors,
-        )
+        # Deduplicate by key within batch — prevents duplicate key errors
+        seen_keys = set()
+        unique_batch = []
+        for chunk in vectors:
+            if chunk["key"] not in seen_keys:
+                seen_keys.add(chunk["key"])
+                unique_batch.append(chunk)
+        vectors = unique_batch
+        if not vectors:
+            continue
+
+        try:
+            s3vectors.put_vectors(
+                vectorBucketName=VECTOR_BUCKET,
+                indexName=VECTOR_INDEX,
+                vectors=vectors,
+            )
+        except Exception as e:
+            if "duplicate keys" in str(e).lower() or "ValidationException" in str(e):
+                print(f"  WARN: duplicate keys in batch — skipping batch of {len(vectors)}")
+                continue
+            raise
         total_written += len(vectors)
         print(f"  Wrote {total_written}/{len(chunks)} vectors to S3 Vectors")
 

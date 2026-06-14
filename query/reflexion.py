@@ -27,10 +27,8 @@ CRITIC_MODEL = (
 )
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import os; get_anthropic_key = lambda: os.environ["ANTHROPIC_API_KEY"]
-
-#client = anthropic.Anthropic(api_key=get_anthropic_key())
-client = anthropic.Anthropic()
+from query.config import get_client
+client = get_client()
 
 CRITIC_SYSTEM = """
 You are a financial data quality critic. Your job is to review an
@@ -139,6 +137,14 @@ def apply_reflexion(
     """
     # Skip reflexion if no tool calls were made (nothing to ground-check)
     if not tool_history:
+        return answer
+
+    # Skip reflexion for short answers — critic overhead not worth it
+    # for factual one-liners or brief summaries (CO-1)
+    REFLEXION_MIN_WORDS = 200
+    if len(answer.split()) < REFLEXION_MIN_WORDS:
+        if verbose:
+            print(f"  [Reflexion] skipped — answer under {REFLEXION_MIN_WORDS} words")
         return answer
 
     result = critique(question, tool_history, answer, verbose)

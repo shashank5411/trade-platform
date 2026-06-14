@@ -3,15 +3,28 @@ FRED economic data — incremental ingestion
 Dataset: per-series watermarks | Frequency: monthly/quarterly
 Key: FRED_API_KEY  (free at https://fred.stlouisfed.org/docs/api/api_key.html)
 """
+import sys
+import os
+
+import zipfile
+
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Locate the extracted --extra-py-files directory in Glue Python Shell
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                with zipfile.ZipFile(os.path.join(_libs_dir, _f)) as _z:
+                    _z.extractall(_libs_dir)
+        sys.path.insert(0, _libs_dir)
+        break
 import argparse
 import json
 import os
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import boto3
 import pandas as pd
@@ -23,9 +36,9 @@ from utils.watermark import get_watermark, update_watermark
 
 
 def _arg(name: str, default: str = "") -> str:
-    for i, a in enumerate(sys.argv[1:], 1):
-        if a == f"--{name}" and i < len(sys.argv):
-            return sys.argv[i]
+    for i, a in enumerate(sys.argv):
+        if a == f"--{name}" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
     return os.getenv(name, default)
 
 
@@ -34,7 +47,7 @@ SOURCE = "fred"
 ENV        = _arg("ENVIRONMENT", "dev")
 ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 BUCKET     = f"{ENV}-trade-{SOURCE}-raw-{ACCOUNT_ID}"
-S3         = boto3.client("s3")
+S3         = boto3.client("s3", region_name="us-east-2")
 
 
 def _get_fred_api_key() -> str:
@@ -54,7 +67,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Ingest FRED economic indicators")
     p.add_argument("--start-date", help="Start date YYYY-MM-DD")
     p.add_argument("--end-date",   help="End date   YYYY-MM-DD")
-    return p.parse_args()
+    return p.parse_known_args()[0]
 
 
 def _resolve_start(series_ids: list, config: dict, args) -> str:

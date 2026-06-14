@@ -16,6 +16,22 @@ Strategy:
 - Store as documents table rows — one row per filing
 - text field = human-readable financial summary for RAG
 """
+import sys
+import os
+import zipfile
+
+# Glue places --extra-py-files zip in glue-python-libs-* but does not extract it
+# Extract it manually so internal packages like utils/ are importable
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                with zipfile.ZipFile(os.path.join(_libs_dir, _f)) as _z:
+                    _z.extractall(_libs_dir)
+        sys.path.insert(0, _libs_dir)
+        break
 import gzip
 
 import os
@@ -26,9 +42,10 @@ import yaml
 import pandas as pd
 from datetime import date
 from io import BytesIO
+from typing import Optional
 
 # ── Path setup ─────────────────────────────────────────────────────────────
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, _libs_dir)
 sys.path.insert(0, "/tmp/ingestion")
 from utils.watermark import (
     load_sec_tracker, save_sec_tracker,
@@ -51,7 +68,7 @@ def _bucket(source, layer):
 RAW_BUCKET  = _bucket("sec", "raw")
 PROC_BUCKET = _bucket("sec", "processed")
 CONFIG_PATH = _arg("config_path",
-    os.path.join(os.path.dirname(__file__), "..", "configs", "sources", "sec.yaml"))
+    os.path.join(_libs_dir, "configs", "sources", "sec.yaml"))
 
 from utils.transform import (
     now_utc,
@@ -196,7 +213,7 @@ def write_processed(rows: list) -> int:
 # ── Facts extraction ───────────────────────────────────────────────────────
 
 def get_concept_value(facts_usgaap: dict, concept: str,
-                      accession: str, form: str) -> float | None:
+                      accession: str, form: str) -> Optional[float]:
     """
     Get the value for a specific concept from a specific filing.
     Matches by accession number and prefers period-specific (non-cumulative)

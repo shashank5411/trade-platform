@@ -271,6 +271,11 @@ class TradePlatformStack(Stack):
                         f"--secret-string YOUR_KEY",
         )
 
+        anthropic_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "AnthropicApiKey",
+                f"trade-platform/{env_name}/anthropic-api-key",
+        )
+
         # ── Glue ingestion job role ───────────────────────────────────────────
         job_role = iam.Role(
             self, "GlueIngestionJobRole",
@@ -286,6 +291,7 @@ class TradePlatformStack(Stack):
                 bucket.grant_read_write(job_role)
         watermarks_table.grant_read_write_data(job_role)
         fred_secret.grant_read(job_role)
+        anthropic_secret.grant_read(job_role)
         llmops_bucket.grant_read_write(job_role)
         sec_prose_bucket.grant_read_write(job_role)
 
@@ -345,25 +351,55 @@ class TradePlatformStack(Stack):
             asset.grant_read(job_role)
             script_assets[source] = asset
 
+        # ── ETL script assets ─────────────────────────────────────────────────
+        ETL_SOURCES = ["yfinance", "fred", "worldbank", "wikipedia"]  # standard ETL jobs
+        etl_script_assets: dict = {}
+        for source in ETL_SOURCES:
+            asset = s3_assets.Asset(
+                self, f"{source.capitalize()}EtlScriptAsset",
+                path=f"ingestion/etl/etl_{source}.py",
+            )
+            asset.grant_read(job_role)
+            etl_script_assets[source] = asset
+
+        # SEC has 3 chained ETL scripts — handled separately
+        etl_sec_asset = s3_assets.Asset(
+            self, "EtlSecScriptAsset",
+            path="ingestion/etl/etl_sec.py",
+        )
+        etl_sec_asset.grant_read(job_role)
+
+        etl_sec_prose_asset = s3_assets.Asset(
+            self, "EtlSecProseScriptAsset",
+            path="ingestion/etl/etl_sec_prose.py",
+        )
+        etl_sec_prose_asset.grant_read(job_role)
+
+        etl_embed_asset = s3_assets.Asset(
+            self, "EtlEmbedScriptAsset",
+            path="ingestion/etl/etl_embed.py",
+        )
+        etl_embed_asset.grant_read(job_role)
+
         # ── Glue Python Shell ingestion jobs ──────────────────────────────────
     # Base modules for all jobs
         ADDITIONAL_MODULES = (
             "yfinance>=0.2.0,"
             "fredapi>=0.5.0,"
-            "wbdata>=1.0.0,"
+            "wbdata==0.3.0,"
             "pyyaml>=6.0.0"
         )
  
-        # Per-source overrides — SEC needs edgartools for prose extraction
         ADDITIONAL_MODULES_OVERRIDE = {
             "sec": (
                 "yfinance>=0.2.0,"
                 "fredapi>=0.5.0,"
-                "wbdata>=1.0.0,"
                 "pyyaml>=6.0.0,"
+                "pyarrow==14.0.2,"
                 "edgartools>=3.0.0"
             ),
         }
+
         JOB_SCHEDULES = {
             "yfinance":  "cron(0 21 ? * MON-FRI *)",   # weekdays after US close
             "fred":      "cron(0 6 1 * ? *)",            # 1st of each month
@@ -372,7 +408,7 @@ class TradePlatformStack(Stack):
             "wikipedia": "cron(0 6 ? * MON *)",           # every Monday
         }
 
-        for source in SOURCES:
+        for source in [s for s in SOURCES if s != "sec"]:
             script = script_assets[source]
             job = glue.CfnJob(
                 self, f"{source.capitalize()}IngestionJob",
@@ -411,4 +447,278 @@ class TradePlatformStack(Stack):
                 actions=[glue.CfnTrigger.ActionProperty(job_name=job.ref)],
                 start_on_creation=False,
                 description=f"[{env_name}] Schedule for {source.upper()} ingestion",
+            )
+
+        sec_script = script_assets["sec"]
+        sec_ingestion_job = glue.CfnJob(
+            self, "SecIngestionJob",
+            name=f"{env_name}-trade-sec-ingestion",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{sec_script.s3_bucket_name}/{sec_script.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ADDITIONAL_MODULES_OVERRIDE["sec"],
+                "--ENVIRONMENT":               env_name,
+                "--FRED_SECRET_NAME":          fred_secret.secret_name,
+                "--job-language":              "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=60,
+            description=f"[{env_name}] SEC EDGAR ingestion — submissions + facts",
+        )
+
+        glue.CfnTrigger(
+            self, "SecIngestionTrigger",
+            name=f"{env_name}-trade-sec-scheduled-trigger",
+            type="SCHEDULED",
+            schedule=JOB_SCHEDULES["sec"],
+            actions=[glue.CfnTrigger.ActionProperty(job_name=sec_ingestion_job.ref)],
+            start_on_creation=False,
+            description=f"[{env_name}] Schedule for SEC ingestion",
+        )
+
+        # ── ETL jobs + conditional trigger chains ─────────────────────────────
+
+        ETL_MODULES_BASE = (
+            "pandas==2.0.3,"
+            "pyarrow==14.0.2,"
+            "pyyaml>=6.0.0"
+        )
+
+        ETL_MODULES_OVERRIDE = {
+            "sec_prose": (
+                "pandas==2.0.3,"
+                "pyarrow==14.0.2,"
+                "pyyaml>=6.0.0,"
+                "boto3>=1.28.0,"
+                "edgartools>=3.0.0"
+            ),
+            "embed": (
+                "pandas==2.0.3,"
+                "pyarrow==14.0.2,"
+                "pyyaml>=6.0.0,"
+                "boto3>=1.28.0"
+            ),
+        }
+
+        # ── Standard ETL jobs (yfinance, fred, worldbank, wikipedia) ──────────
+        for source in ETL_SOURCES:
+            etl_job = glue.CfnJob(
+                self, f"{source.capitalize()}EtlJob",
+                name=f"{env_name}-trade-{source}-etl",
+                role=job_role.role_arn,
+                command=glue.CfnJob.JobCommandProperty(
+                    name="pythonshell",
+                    python_version="3.9",
+                    script_location=(
+                        f"s3://{etl_script_assets[source].s3_bucket_name}"
+                        f"/{etl_script_assets[source].s3_object_key}"
+                    ),
+                ),
+                default_arguments={
+                    "--extra-py-files": (
+                        f"s3://{ingestion_pkg.s3_bucket_name}"
+                        f"/{ingestion_pkg.s3_object_key}"
+                    ),
+                    "--additional-python-modules": ETL_MODULES_BASE,
+                    "--ENVIRONMENT": env_name,
+                    "--job-language": "python",
+                },
+                glue_version="3.0",
+                max_capacity=0.0625,
+                timeout=30,
+                description=f"[{env_name}] {source.upper()} raw → Parquet ETL",
+            )
+
+            glue.CfnTrigger(
+                self, f"{source.capitalize()}EtlTrigger",
+                name=f"{env_name}-trade-{source}-etl-trigger",
+                type="CONDITIONAL",
+                start_on_creation=True,
+                actions=[glue.CfnTrigger.ActionProperty(job_name=etl_job.ref)],
+                predicate=glue.CfnTrigger.PredicateProperty(
+                    logical="AND",
+                    conditions=[
+                        glue.CfnTrigger.ConditionProperty(
+                            logical_operator="EQUALS",
+                            job_name=f"{env_name}-trade-{source}-ingestion",
+                            state="SUCCEEDED",
+                        )
+                    ],
+                ),
+                description=(
+                    f"[{env_name}] Fire etl_{source} after ingest_{source} succeeds"
+                ),
+            )
+
+        # ── SEC ETL chain ─────────────────────────────────────────────────────
+        etl_sec_job = glue.CfnJob(
+            self, "EtlSecJob",
+            name=f"{env_name}-trade-sec-etl",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{etl_sec_asset.s3_bucket_name}"
+                    f"/{etl_sec_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_BASE,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=30,
+            description=f"[{env_name}] SEC XBRL → Parquet ETL",
+        )
+
+        etl_sec_prose_job = glue.CfnJob(
+            self, "EtlSecProseJob",
+            name=f"{env_name}-trade-sec-prose-etl",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{etl_sec_prose_asset.s3_bucket_name}"
+                    f"/{etl_sec_prose_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_OVERRIDE["sec_prose"],
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=60,
+            description=f"[{env_name}] SEC 10-K/10-Q prose sections → Parquet",
+        )
+
+        etl_embed_job = glue.CfnJob(
+            self, "EtlEmbedJob",
+            name=f"{env_name}-trade-sec-embed-etl",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{etl_embed_asset.s3_bucket_name}"
+                    f"/{etl_embed_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_OVERRIDE["embed"],
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=60,
+            description=f"[{env_name}] Cohere embed → S3 Vectors",
+        )
+
+        # Step 1: ingest_sec → etl_sec
+        glue.CfnTrigger(
+            self, "EtlSecTrigger",
+            name=f"{env_name}-trade-sec-etl-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(job_name=etl_sec_job.ref)],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="AND",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=f"{env_name}-trade-sec-ingestion",
+                        state="SUCCEEDED",
+                    )
+                ],
+            ),
+            description=f"[{env_name}] Fire etl_sec after ingest_sec succeeds",
+        )
+
+        # Step 2: etl_sec → etl_sec_prose
+        glue.CfnTrigger(
+            self, "EtlSecProseTrigger",
+            name=f"{env_name}-trade-sec-prose-etl-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(job_name=etl_sec_prose_job.ref)],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="AND",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=etl_sec_job.ref,
+                        state="SUCCEEDED",
+                    )
+                ],
+            ),
+            description=f"[{env_name}] Fire etl_sec_prose after etl_sec succeeds",
+        )
+
+        # Step 3: etl_sec_prose → etl_embed
+        glue.CfnTrigger(
+            self, "EtlEmbedTrigger",
+            name=f"{env_name}-trade-sec-embed-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(job_name=etl_embed_job.ref)],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="AND",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=etl_sec_prose_job.ref,
+                        state="SUCCEEDED",
+                    )
+                ],
+            ),
+            description=f"[{env_name}] Fire etl_embed after etl_sec_prose succeeds",
+        )
+
+        # ── ON_DEMAND manual triggers — correct entry points for manual runs ──────────
+        # CONDITIONAL triggers only fire when upstream job is itself trigger-initiated.
+        # Fire these to kick off the full chain manually.
+        # When ready to automate: replace with SCHEDULED triggers on same job.
+        # Usage: aws glue start-trigger --name {env}-trade-{source}-manual-trigger
+
+        for source in SOURCES:
+            glue.CfnTrigger(
+                self, f"{source.capitalize()}ManualTrigger",
+                name=f"{env_name}-trade-{source}-manual-trigger",
+                type="ON_DEMAND",
+                actions=[glue.CfnTrigger.ActionProperty(
+                    job_name=f"{env_name}-trade-{source}-ingestion"
+                )],
+                description=(
+                    f"[{env_name}] Manual entry point for {source.upper()} "
+                    f"ingestion — fires conditional ETL chain"
+                ),
             )

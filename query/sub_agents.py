@@ -15,6 +15,7 @@ Each specialist has:
 import os
 import json
 import anthropic
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -26,10 +27,8 @@ MODEL      = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 4096
 
 ENV = os.environ.get("ENV", "dev")
-import os; get_anthropic_key = lambda: os.environ["ANTHROPIC_API_KEY"]
-
-client = anthropic.Anthropic(api_key=get_anthropic_key())
-#client   = anthropic.Anthropic()
+from query.config import get_client
+client = get_client()
 registry = get_registry()
 
 # ── Tool subsets per specialist ────────────────────────────────────────────
@@ -125,10 +124,18 @@ Available documents:
 
 Tools:
   get_prose       — use for targeted section retrieval when you know
-                    exactly which section is needed (item_1a for risks,
-                    item_7 for MD&A, note_1 for accounting policies).
-                    Faster and more precise than semantic_search for
-                    known section lookups.
+                    exactly which sections are needed.
+                    IMPORTANT: when a question asks about multiple sections
+                    (e.g. risk factors AND MD&A), always use the
+                    section_names parameter to fetch ALL needed sections
+                    in a single call:
+                      get_prose("AAPL", section_names=["item_1a", "item_7"])
+                    Never make separate get_prose calls for sections you
+                    could have batched — each extra call is a wasted iteration.
+                    Common batching patterns:
+                      "risk factors and MD&A"  → ["item_1a", "item_7"]
+                      "business and risks"     → ["item_1", "item_1a"]
+                      "full picture"           → ["item_1", "item_1a", "item_7"]
                     - NOTE for large banks (JPM, BAC): Item 7 MD&A may be a
                       cross-reference stub returning less than 500 characters.
                       If get_prose returns less than 500 chars for item_7 on
@@ -311,34 +318,47 @@ def _run_agent(
             break
 
         elif response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
+            tool_results    = []
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
-                tool_name   = block.name
-                tool_inputs = block.input
-
-                # Deduplication
-                call_sig  = f"{tool_name}:{json.dumps(tool_inputs, sort_keys=True)}"
+            # Dedup checks must stay sequential — shared set mutation
+            to_execute = {}
+            for block in tool_use_blocks:
+                call_sig  = f"{block.name}:{json.dumps(block.input, sort_keys=True)}"
                 was_dedup = call_sig in tool_call_seen
-                if was_dedup:
-                    result = (
-                        f"You already called {tool_name} with these "
-                        f"inputs. Use the previous result instead of "
-                        f"calling again."
-                    )
-                    if verbose:
-                        print(f"  [{agent_name}] dedup blocked: {tool_name}")
-                else:
+                if not was_dedup:
                     tool_call_seen.add(call_sig)
+                to_execute[block.id] = (block, was_dedup)
+
+            def _run_one(block_id):
+                block, was_dedup = to_execute[block_id]
+                if was_dedup:
                     if verbose:
-                        print(f"  [{agent_name}] tool: {tool_name}")
-                    result = _execute_tool(tool_name, tool_inputs)
+                        print(f"  [{agent_name}] dedup blocked: {block.name}")
+                    return block_id, (
+                        f"You already called {block.name} with these inputs. "
+                        f"Use the previous result instead of calling again."
+                    ), True
+                if verbose:
+                    print(f"  [{agent_name}] tool: {block.name}")
+                result = _execute_tool(block.name, block.input)
+                return block_id, result or "No result returned.", False
 
-                result = result or "No result returned."
-                trace.record_tool_call(tool_name, tool_inputs, result, was_dedup)
+            results_map = {}
+            if len(to_execute) == 1:
+                bid, res, dedup = _run_one(list(to_execute.keys())[0])
+                results_map[bid] = (res, dedup)
+            else:
+                with ThreadPoolExecutor(max_workers=len(to_execute)) as pool:
+                    futures = {pool.submit(_run_one, bid): bid
+                               for bid in to_execute}
+                    for future in as_completed(futures):
+                        bid, res, dedup = future.result()
+                        results_map[bid] = (res, dedup)
 
+            for block in tool_use_blocks:
+                result, was_dedup = results_map[block.id]
+                trace.record_tool_call(block.name, block.input, result, was_dedup)
                 tool_results.append({
                     "type":        "tool_result",
                     "tool_use_id": block.id,
@@ -405,15 +425,29 @@ def _run_agent(
 
     # Reflexion pass
     def retry_fn(guidance: str) -> str:
-        retry_messages = list(history or [])
-        retry_messages.append({
+        # Seed with the full conversation including all tool results
+        # from the first run — agent can ground itself without re-fetching.
+        # Strip the final assistant answer (last message) so the agent
+        # doesn't anchor on the hallucinated response.
+        prior_messages = [
+            m for m in messages
+            if not (
+                m.get("role") == "assistant"
+                and m is messages[-1]  # drop only the final assistant turn
+            )
+        ]
+        retry_messages = prior_messages + [{
             "role":    "user",
             "content": (
-                f"{question}\n\n"
-                f"Important: {guidance} "
-                f"Only state facts that appear in your tool results."
+                f"Your previous answer had issues: {guidance}\n\n"
+                f"The tool results above contain all retrieved data. "
+                f"Answer the original question using ONLY facts present "
+                f"in those tool results. Do not introduce any numbers, "
+                f"percentages, or quotes that do not appear verbatim in "
+                f"the tool results. If a section was not retrieved, "
+                f"say so explicitly rather than fabricating its content."
             ),
-        })
+        }]
         for _ in range(max_iter):
             try:
                 r = client.messages.create(

@@ -371,27 +371,54 @@ TOOLS = [
                 },
                 "section_name": {
                     "type": "string",
-                    "description": "Section to fetch",
-                    "enum": ["item_1", "item_1a", "item_7",
-                             "item_7a", "note_1", "note_2", "note_3"]
+                    "description": (
+                        "Single section to fetch. Options: item_1 (business), "
+                        "item_1a (risk factors), item_7 (MD&A), item_7a (market risk), "
+                        "note_1 (accounting policies), note_2 (revenue), note_3 (debt). "
+                        "Use section_names instead when fetching multiple sections."
+                    ),
+                    "enum": ["item_1", "item_1a", "item_7", "item_7a",
+                             "note_1", "note_2", "note_3"]
+                },
+                "section_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Fetch multiple sections in ONE call instead of calling "
+                        "get_prose separately for each. Preferred over repeated "
+                        "single-section calls. "
+                        "e.g. [\"item_1a\", \"item_7\"] fetches risk factors AND "
+                        "MD&A in a single Athena query. "
+                        "Options: item_1, item_1a, item_7, item_7a, "
+                        "note_1, note_2, note_3"
+                    )
                 },
                 "form_type": {
                     "type": "string",
-                    "description": "10-K or 10-Q",
+                    "description": "Filing type: 10-K (annual) or 10-Q (quarterly)",
                     "enum": ["10-K", "10-Q"]
                 },
                 "start": {
                     "type": "string",
-                    "description": "Start date YYYY-MM-DD"
+                    "description": "Start date YYYY-MM-DD (optional)"
                 },
                 "end": {
                     "type": "string",
-                    "description": "End date YYYY-MM-DD"
+                    "description": "End date YYYY-MM-DD (optional)"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Number of results (default 3)",
+                    "description": "Max number of filings to return (default 3)",
                     "default": 3
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": (
+                        "Characters returned per section. Default 8000 — covers "
+                        "most answers. Pass 20000 for deep dives into long sections "
+                        "like MD&A or full risk factor lists."
+                    ),
+                    "default": 8000
                 },
             },
             "required": ["entity"]

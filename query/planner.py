@@ -21,10 +21,8 @@ PLANNER_MODEL = (
     if ENV == "prod"
     else "claude-haiku-4-5-20251001"
 )
-import os; get_anthropic_key = lambda: os.environ["ANTHROPIC_API_KEY"]
-
-client = anthropic.Anthropic(api_key=get_anthropic_key())
-#client = anthropic.Anthropic()
+from query.config import get_client
+client = get_client()
 
 PLANNER_SYSTEM = f"""
 You are an execution planner for a financial intelligence platform.

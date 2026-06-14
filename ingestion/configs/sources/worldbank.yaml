@@ -1,5 +1,5 @@
 default_start_date:
-  dev: "2020-01-01"
+  dev: "2015-01-01"
   prod: "2000-01-01"
 frequency: annual
 max_lookback_days: 730

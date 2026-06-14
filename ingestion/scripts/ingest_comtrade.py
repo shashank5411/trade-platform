@@ -4,13 +4,26 @@ Dataset: india_usa_trade | Granularity: annual
 Key: COMTRADE_API_KEY  (register at https://comtradeplus.un.org/)
      Without key, falls back to free preview endpoint (500 records max).
 """
+import sys
+import os
+
+import zipfile
+
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Locate the extracted --extra-py-files directory in Glue Python Shell
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                with zipfile.ZipFile(os.path.join(_libs_dir, _f)) as _z:
+                    _z.extractall(_libs_dir)
+        sys.path.insert(0, _libs_dir)
+        break
 import argparse
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import boto3
 import comtradeapicall
@@ -26,7 +39,7 @@ DATASET = "india_usa_trade"
 ENV        = os.getenv("ENVIRONMENT", "dev")
 ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 BUCKET     = f"{ENV}-trade-comtrade-raw-{ACCOUNT_ID}"
-S3         = boto3.client("s3")
+S3         = boto3.client("s3", region_name="us-east-2")
 
 API_KEY  = os.getenv("COMTRADE_API_KEY", "")
 REPORTER = "356"   # India
@@ -38,7 +51,7 @@ def parse_args():
     p.add_argument("--start-period", help="Start year e.g. 2020")
     p.add_argument("--end-period",   help="End year   e.g. 2023")
     p.add_argument("--debug", action="store_true", help="Hit the API directly and print raw response")
-    return p.parse_args()
+    return p.parse_known_args()[0]
 
 
 def debug_raw_request():

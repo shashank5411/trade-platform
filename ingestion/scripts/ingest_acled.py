@@ -3,15 +3,28 @@ ACLED conflict events — incremental ingestion
 Dataset: conflict_events | Granularity: monthly
 Keys: ACLED_API_KEY + ACLED_EMAIL  (register at https://acleddata.com/register/)
 """
+import sys
+import os
+
+import zipfile
+
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Locate the extracted --extra-py-files directory in Glue Python Shell
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                with zipfile.ZipFile(os.path.join(_libs_dir, _f)) as _z:
+                    _z.extractall(_libs_dir)
+        sys.path.insert(0, _libs_dir)
+        break
 import argparse
 import json
 import os
 import sys
 from calendar import monthrange
 from datetime import datetime, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import boto3
 import pandas as pd
@@ -27,7 +40,7 @@ DATASET = "conflict_events"
 ENV        = os.getenv("ENVIRONMENT", "dev")
 ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 BUCKET     = f"{ENV}-trade-acled-raw-{ACCOUNT_ID}"
-S3         = boto3.client("s3")
+S3         = boto3.client("s3", region_name="us-east-2")
 
 API_URL = "https://api.acleddata.com/acled/read"
 API_KEY = os.getenv("ACLED_API_KEY", "")
@@ -43,7 +56,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Ingest ACLED conflict event data")
     p.add_argument("--start-period", help="Start month e.g. 2023-01")
     p.add_argument("--end-period",   help="End month   e.g. 2023-12")
-    return p.parse_args()
+    return p.parse_known_args()[0]
 
 
 def period_to_dates(start_period: str, end_period: str) -> tuple[str, str]:

@@ -1,0 +1,1 @@
+{"Role":"arn:aws:iam::197411402303:role/TradePlatformStack-dev-GlueIngestionJobRole41A2A06F-ra3hnOMfWaEo","Command":{"Name":"pythonshell","PythonVersion":"3.9","ScriptLocation":"s3://aws-glue-assets-197411402303-us-east-2/scripts/ingest_sec.py"}}

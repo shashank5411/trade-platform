@@ -5,15 +5,28 @@ Note: UNCTAD API returns a full bulk dataset; period args track watermark only.
 If DATA_URL returns 404, browse https://unctadstat.unctad.org/datacentre/
 and update it with the direct CSV export link for "seaborne shipments".
 """
+import sys
+import os
+
+import zipfile
+
+_libs_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Locate the extracted --extra-py-files directory in Glue Python Shell
+for _entry in os.listdir('/tmp/'):
+    if _entry.startswith('glue-python-libs-'):
+        _libs_dir = os.path.join('/tmp/', _entry)
+        for _f in os.listdir(_libs_dir):
+            if _f.endswith('.zip'):
+                with zipfile.ZipFile(os.path.join(_libs_dir, _f)) as _z:
+                    _z.extractall(_libs_dir)
+        sys.path.insert(0, _libs_dir)
+        break
 import argparse
 import io
 import json
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import boto3
 import pandas as pd
@@ -29,7 +42,7 @@ DATASET = "seaborne_shipments"
 ENV        = os.getenv("ENVIRONMENT", "dev")
 ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 BUCKET     = f"{ENV}-trade-unctad-raw-{ACCOUNT_ID}"
-S3         = boto3.client("s3")
+S3         = boto3.client("s3", region_name="us-east-2")
 
 DATA_URL = (
     "https://unctadstat.unctad.org/api/stats/SummaryExport/en/data/"
@@ -45,7 +58,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Ingest UNCTAD seaborne trade data")
     p.add_argument("--start-period", help="Start year e.g. 2020  (watermark tracking only)")
     p.add_argument("--end-period",   help="End year   e.g. 2023  (watermark tracking only)")
-    return p.parse_args()
+    return p.parse_known_args()[0]
 
 
 def fetch_seaborne() -> bytes:

@@ -4,8 +4,17 @@ Business logic — full tool suite for the economic intelligence platform.
 Tools:
   PRICE:      get_prices, get_prices_multi, get_price_on_date, get_prices_on_date
   INDICATOR:  get_indicator, get_indicator_multi, get_indicator_on_date
-  DOCUMENT:   get_documents
+  DOCUMENT:   get_documents, get_prose
   MACRO:      get_macro_snapshot (wrapper around get_indicator_on_date + SPY)
+  SEARCH:     semantic_search
+
+Phase 8 changes:
+  - get_prose: added max_chars parameter (CO-2) — default 8000, agent can
+    request up to 20000 for deep dives
+  - get_prose: added section_names list parameter (LA-3) — fetch multiple
+    sections in one Athena query instead of one call per section
+  - All AthenaError catches now use AthenaQueryError.agent_message() so
+    the agent receives structured, actionable error context
 """
 
 import json
@@ -18,7 +27,7 @@ from typing import Optional
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from query.athena import query, AthenaError
+from query.athena import query, AthenaError, AthenaQueryError
 
 # ── Database names ─────────────────────────────────────────────────────────
 ENV     = os.environ.get("ENV", "dev")
@@ -52,10 +61,14 @@ DEFAULT_MACRO = [
     ("DGS2",     "FRED",      None),
     ("GDP",      "FRED",      None),
     ("NY.GDP.MKTP.CD", "WORLDBANK", "US"),
-    ("^VIX", "yfinance_index", None),  # Fear gauge
-    ("DX-Y.NYB", "yfinance_fx", None), # Dollar strength
-    ("GC=F", "yfinance_futures", None), # Gold
+    ("^VIX", "yfinance_index", None),
+    ("DX-Y.NYB", "yfinance_fx", None),
+    ("GC=F", "yfinance_futures", None),
 ]
+
+# ── get_prose limits ───────────────────────────────────────────────────────
+PROSE_DEFAULT_CHARS = 8_000
+PROSE_MAX_CHARS     = 20_000
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -75,35 +88,10 @@ def _price_granularity(start: str, end: str) -> str:
     else:
         return "monthly"
 
-import time
-
-def embed_chunks(chunks: list) -> list:
-    embedded = []
-    total    = len(chunks)
-
-    for i, chunk in enumerate(chunks):
-        vector = embed_text(chunk["text"])
-        if vector is not None:
-            chunk["vector"] = vector
-            embedded.append(chunk)
-
-        # Rate limiting — 2 req/sec safely under Titan default quota
-        time.sleep(0.5)
-
-        if (i + 1) % 25 == 0 or (i + 1) == total:
-            pct = int((i + 1) / total * 100)
-            print(f"  Embedded {i+1}/{total} chunks ({pct}%)")
-
-    return embedded
 
 def _indicator_granularity(start: str, end: str,
                             native_freq: str = "monthly") -> str:
-    """
-    Auto-select aggregation granularity for indicator data.
-    Respects native frequency floor — can't go finer than source provides.
-    """
     days = _range_days(start, end)
-
     if native_freq == "annual":
         return "annual"
     elif native_freq == "quarterly":
@@ -119,14 +107,12 @@ def _indicator_granularity(start: str, end: str,
 
 
 def _year_filter(start: str, end: str) -> str:
-    """Partition pruning — cast year column to integer for Athena."""
     sy = int(start[:4])
     ey = int(end[:4])
     return f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
 
 
 def _price_summary(df: pd.DataFrame, ticker: str) -> str:
-    """Compact summary stats for price data."""
     if df.empty:
         return f"No data for {ticker}."
     close_col = "close" if "close" in df.columns else \
@@ -144,8 +130,10 @@ def _price_summary(df: pd.DataFrame, ticker: str) -> str:
                "week_low" if "week_low" in df.columns else close_col
 
     return (
-        f"{ticker} | {df.iloc[0]['date'] if 'date' in df.columns else df.iloc[0].get('week_start', '')}"
-        f" → {df.iloc[-1]['date'] if 'date' in df.columns else df.iloc[-1].get('week_start', '')}\n"
+        f"{ticker} | "
+        f"{df.iloc[0]['date'] if 'date' in df.columns else df.iloc[0].get('week_start', '')}"
+        f" → "
+        f"{df.iloc[-1]['date'] if 'date' in df.columns else df.iloc[-1].get('week_start', '')}\n"
         f"  Start: ${start_p:.2f}  End: ${end_p:.2f}  "
         f"Change: {pct:+.1f}%\n"
         f"  High: ${df[high_col].max():.2f}  "
@@ -179,6 +167,17 @@ def _format_price_result(df: pd.DataFrame, ticker: str,
     )
 
 
+def _athena_error_msg(e: Exception, context: str) -> str:
+    """
+    Return a structured error message for the agent.
+    Uses AthenaQueryError.agent_message() for structured errors,
+    falls back to generic string for unexpected exceptions.
+    """
+    if isinstance(e, AthenaQueryError):
+        return e.agent_message()
+    return f"Error {context}: {e}"
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # PRICE TOOLS
 # ══════════════════════════════════════════════════════════════════════════
@@ -189,7 +188,6 @@ def get_prices(
     end:      str,
     exchange: Optional[str] = None
 ) -> str:
-    """Single ticker, date range, auto-granularity."""
     ticker      = ticker.upper()
     granularity = _price_granularity(start, end)
     yf          = _year_filter(start, end)
@@ -245,8 +243,8 @@ def get_prices(
     try:
         df = query(sql, DB["yfinance"])
         return _format_price_result(df, ticker, granularity)
-    except AthenaError as e:
-        return f"Error fetching prices for {ticker}: {e}"
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching prices for {ticker}")
 
 
 def get_prices_multi(
@@ -255,7 +253,6 @@ def get_prices_multi(
     end:      str,
     exchange: Optional[str] = None
 ) -> str:
-    """Multiple tickers, date range, auto-granularity. Single Athena query."""
     tickers     = [t.upper() for t in tickers]
     ticker_list = "','".join(tickers)
     granularity = _price_granularity(start, end)
@@ -313,35 +310,30 @@ def get_prices_multi(
         df = query(sql, DB["yfinance"])
         if df.empty:
             return f"No price data found for {tickers}."
-
-        # Summary per ticker
         summaries = []
         for t in tickers:
             t_df = df[df["ticker"] == t]
             if not t_df.empty:
                 summaries.append(_price_summary(t_df, t))
-
         return (
             f"Granularity: {granularity} | "
             f"Tickers: {', '.join(tickers)}\n\n"
             + "\n".join(summaries)
             + f"\n\nFull data:\n{df.to_string(index=False)}"
         )
-    except AthenaError as e:
-        return f"Error fetching prices for {tickers}: {e}"
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching prices for {tickers}")
 
 
 def get_price_on_date(
-    ticker: str,
+    ticker:   str,
     date_str: str,
     exchange: Optional[str] = None
 ) -> str:
-    """Single ticker, single date. Returns nearest trading day if needed."""
     ticker    = ticker.upper()
     as_of_yr  = int(date_str[:4])
     ex_filter = f"AND exchange = '{exchange}'" if exchange else ""
 
-    # Nearest trading day on or before requested date
     sql = f"""
         SELECT ticker, exchange, date, currency,
                open, high, low, close, adj_close, volume
@@ -357,7 +349,7 @@ def get_price_on_date(
         df = query(sql, DB["yfinance"])
         if df.empty:
             return f"No price data found for {ticker} on or before {date_str}."
-        row = df.iloc[0]
+        row  = df.iloc[0]
         note = (f" (nearest trading day to {date_str})"
                 if row["date"] != date_str else "")
         return (
@@ -370,8 +362,8 @@ def get_price_on_date(
             f"  Volume:    {int(row['volume']):,}\n"
             f"  Currency:  {row['currency']}"
         )
-    except AthenaError as e:
-        return f"Error fetching price for {ticker} on {date_str}: {e}"
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching price for {ticker} on {date_str}")
 
 
 def get_prices_on_date(
@@ -379,7 +371,6 @@ def get_prices_on_date(
     date_str: str,
     exchange: Optional[str] = None
 ) -> str:
-    """Multiple tickers, single date. Single Athena query."""
     tickers     = [t.upper() for t in tickers]
     ticker_list = "','".join(tickers)
     as_of_yr    = int(date_str[:4])
@@ -411,8 +402,8 @@ def get_prices_on_date(
             f"(nearest trading day per ticker):\n\n"
             f"{df.to_string(index=False)}"
         )
-    except AthenaError as e:
-        return f"Error fetching prices on {date_str}: {e}"
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching prices on {date_str}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -428,7 +419,6 @@ def _indicator_db(series_id: str, source: Optional[str]) -> str:
 def _indicator_agg_sql(series_id: str, start: str, end: str,
                         granularity: str, country_filter: str,
                         db: str) -> str:
-    """Build aggregation SQL for indicator based on granularity."""
     yf = _year_filter(start, end)
 
     if granularity == "annual":
@@ -438,7 +428,6 @@ def _indicator_agg_sql(series_id: str, start: str, end: str,
     elif granularity == "monthly":
         trunc = "month"
     else:
-        # daily or native — no aggregation
         return f"""
             SELECT indicator_id, indicator_name, date,
                    value, unit, frequency, country, vintage_date
@@ -478,13 +467,10 @@ def get_indicator(
     source:    Optional[str] = None,
     as_of:     Optional[str] = None,
 ) -> str:
-    """Single indicator series, date range, auto-granularity."""
     db             = _indicator_db(series_id, source)
     country_filter = f"AND country = '{country}'" if country else ""
-
-    # Get native frequency first for granularity decision
-    native_freq = "monthly"  # safe default
-    granularity = _indicator_granularity(start, end, native_freq)
+    native_freq    = "monthly"
+    granularity    = _indicator_granularity(start, end, native_freq)
 
     sql = _indicator_agg_sql(
         series_id, start, end, granularity, country_filter, db
@@ -497,7 +483,6 @@ def get_indicator(
                 f"No data for '{series_id}' "
                 f"between {start} and {end}."
             )
-
         header = (
             f"{df.iloc[0]['indicator_name']} ({series_id})\n"
             f"Unit: {df.iloc[0]['unit']} | "
@@ -507,9 +492,8 @@ def get_indicator(
         cols = ["date", "value", "country"] \
                if "country" in df.columns else ["date", "value"]
         return f"{header}\n{df[cols].to_string(index=False)}"
-
-    except AthenaError as e:
-        return f"Error fetching indicator {series_id}: {e}"
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching indicator {series_id}")
 
 
 def get_indicator_multi(
@@ -519,10 +503,6 @@ def get_indicator_multi(
     countries:  Optional[list] = None,
     source:     Optional[str]  = None,
 ) -> str:
-    """
-    Multiple indicator series, date range, auto-granularity.
-    FRED and WorldBank queried separately, merged in Python.
-    """
     granularity = _indicator_granularity(start, end)
     results     = []
 
@@ -539,15 +519,21 @@ def get_indicator_multi(
             df = query(sql, db)
             if not df.empty:
                 results.append(df)
-        except AthenaError:
-            continue
+        except Exception as e:
+            # Include per-series errors in output so agent knows what failed
+            results_note = _athena_error_msg(e, f"fetching {series_id}")
+            results.append(pd.DataFrame([{
+                "indicator_id": series_id,
+                "date": "ERROR",
+                "value": results_note,
+                "unit": "",
+                "country": "",
+            }]))
 
     if not results:
         return f"No data found for {series_ids} between {start} and {end}."
 
-    combined = pd.concat(results).sort_values(
-        ["indicator_id", "date"]
-    )
+    combined = pd.concat(results).sort_values(["indicator_id", "date"])
     return (
         f"Indicators: {series_ids}\n"
         f"Granularity: {granularity} | "
@@ -562,13 +548,9 @@ def get_indicator_on_date(
     countries:  Optional[list] = None,
     source:     Optional[str]  = None,
 ) -> str:
-    """
-    Multiple indicators, single date.
-    Returns nearest observation on or before date_str per series.
-    Core function — get_macro_snapshot wraps this.
-    """
     as_of_yr = int(date_str[:4])
     results  = []
+    errors   = []
 
     for i, series_id in enumerate(series_ids):
         db      = _indicator_db(series_id, source)
@@ -590,21 +572,24 @@ def get_indicator_on_date(
             df = query(sql, db)
             if not df.empty:
                 results.append(df.iloc[0].to_dict())
-        except AthenaError:
-            continue
+        except Exception as e:
+            errors.append(_athena_error_msg(e, f"fetching {series_id}"))
 
-    if not results:
-        return f"No indicator data found as of {date_str}."
+    if not results and errors:
+        return "Errors fetching indicators:\n" + "\n".join(errors)
 
     lines = [f"Indicators as of {date_str}", "=" * 50]
     for r in results:
-        stale = _staleness(r["date"], date_str)
+        stale     = _staleness(r["date"], date_str)
         stale_str = f" [{stale}]" if stale else ""
         lines.append(
             f"{r['indicator_name']:45s} "
             f"{r['value']:>12.2f} {r['unit']}"
             f"  (obs: {r['date']}){stale_str}"
         )
+    if errors:
+        lines.append("\nErrors (partial results above):")
+        lines.extend(errors)
     return "\n".join(lines)
 
 
@@ -618,13 +603,10 @@ def get_macro_snapshot(as_of_date: str) -> str:
         as_of_date,
         countries=[s[2] for s in DEFAULT_MACRO],
     )
-
-    # New — market-based macro signals
     market_signals = get_prices_on_date(
         ["SPY", "^VIX", "DX-Y.NYB", "GC=F", "CL=F"],
         as_of_date
     )
-
     return f"{macro}\n\nMarket signals:\n{market_signals}"
 
 
@@ -640,20 +622,16 @@ def get_documents(
     limit:    int = 3,
     source:   Optional[str] = None
 ) -> str:
-    """
-    Fetch SEC filings or Wikipedia articles for an entity.
-    Phase 5 will replace text retrieval with vector search.
-    """
     entity          = entity.upper() if not entity[0].islower() else entity
-    source_filter   = f"AND source = '{source}'"    if source   else ""
+    source_filter   = f"AND source = '{source}'"      if source   else ""
     doc_type_filter = f"AND form_type = '{doc_type}'" if doc_type else ""
     date_filters    = ""
     year_filter     = ""
 
     if start and end:
-        sy          = int(start[:4])
-        ey          = int(end[:4])
-        year_filter = f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
+        sy           = int(start[:4])
+        ey           = int(end[:4])
+        year_filter  = f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
         date_filters = f"AND doc_date BETWEEN '{start}' AND '{end}'"
 
     databases = (
@@ -679,7 +657,8 @@ def get_documents(
             df = query(sql, db)
             if not df.empty:
                 all_results.append(df)
-        except AthenaError:
+        except Exception as e:
+            # Non-fatal — try next database
             continue
 
     if not all_results:
@@ -704,17 +683,24 @@ def get_documents(
 # ══════════════════════════════════════════════════════════════════════════
 
 def get_prose(
-    entity:       str,
-    section_name: Optional[str] = None,
-    form_type:    Optional[str] = None,
-    start:        Optional[str] = None,
-    end:          Optional[str] = None,
-    limit:        int = 3,
+    entity:        str,
+    section_name:  Optional[str]  = None,
+    section_names: Optional[list] = None,
+    form_type:     Optional[str]  = None,
+    start:         Optional[str]  = None,
+    end:           Optional[str]  = None,
+    limit:         int  = 3,
+    max_chars:     int  = PROSE_DEFAULT_CHARS,
 ) -> str:
     """
     Fetch prose sections from 10-K/10-Q filings.
-    Use for qualitative questions: risk factors, MD&A,
-    accounting policies, business descriptions.
+
+    section_name  — single section (backwards compatible)
+    section_names — list of sections fetched in ONE Athena query (LA-3)
+                    e.g. ["item_1", "item_1a", "item_7"]
+                    When both are provided, section_names takes precedence.
+    max_chars     — chars returned per section (CO-2)
+                    default: 8000. Pass max_chars=20000 for deep dives.
 
     section_name options:
       item_1   — Business description
@@ -725,19 +711,32 @@ def get_prose(
       note_2   — Revenue segments
       note_3   — Debt details
     """
-    entity         = entity.upper()
-    section_filter = (f"AND section_name = '{section_name}'"
-                      if section_name else "")
-    form_filter    = (f"AND form_type = '{form_type.replace('-', '')}'"
-                      if form_type else "")
-    year_filter    = ""
-    date_filter    = ""
+    entity    = entity.upper()
+    max_chars = min(max_chars, PROSE_MAX_CHARS)  # hard cap at 20k
+
+    # section_names list takes precedence over single section_name
+    if section_names:
+        section_list   = "','".join(section_names)
+        section_filter = f"AND section_name IN ('{section_list}')"
+    elif section_name:
+        section_filter = f"AND section_name = '{section_name}'"
+    else:
+        section_filter = ""
+
+    form_filter = (f"AND form_type = '{form_type.replace('-', '')}'"
+                   if form_type else "")
+    year_filter = ""
+    date_filter = ""
 
     if start and end:
         sy          = int(start[:4])
         ey          = int(end[:4])
         year_filter = f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
         date_filter = f"AND filed_date BETWEEN '{start}' AND '{end}'"
+
+    # When fetching multiple sections, increase the row limit proportionally
+    # so we get `limit` filings worth of each section
+    row_limit = limit * len(section_names) if section_names else limit
 
     sql = f"""
         SELECT doc_id, entity, form_type, filed_date,
@@ -749,8 +748,8 @@ def get_prose(
           {form_filter}
           {year_filter}
           {date_filter}
-        ORDER BY filed_date DESC
-        LIMIT  {limit}
+        ORDER BY filed_date DESC, section_name ASC
+        LIMIT  {row_limit}
     """
 
     try:
@@ -760,23 +759,31 @@ def get_prose(
 
         output = []
         for _, row in df.iterrows():
+            text_preview = str(row["text"])[:max_chars]
+            truncated    = len(str(row["text"])) > max_chars
+            suffix       = (
+                f"\n[... truncated at {max_chars} chars. "
+                f"Pass max_chars=20000 to get full section ...]"
+                if truncated else ""
+            )
             output.append(
                 f"=== {row['section_title']} "
                 f"({row['form_type']} | {row['filed_date']}) ===\n"
                 f"Entity: {row['entity']} | "
                 f"Section: {row['section_name']} | "
                 f"Extraction: {row['extraction_method']}\n\n"
-                f"{str(row['text'])[:20000]}"
+                f"{text_preview}{suffix}"
             )
         return "\n\n".join(output)
 
-    except AthenaError as e:
-        return f"Error fetching prose for {entity}: {e}"
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching prose for {entity}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # SEMANTIC SEARCH
 # ══════════════════════════════════════════════════════════════════════════
+
 def semantic_search(
     query:  str,
     top_k:  int = 5,
@@ -786,7 +793,6 @@ def semantic_search(
     """
     Semantic search over SEC filings and Wikipedia articles.
     Embeds query with Cohere v3, queries S3 Vectors index, returns top-K chunks.
-    Filters applied in Python after retrieval (S3 Vectors filter syntax varies).
     """
     # 1. Embed the query
     try:
@@ -805,7 +811,7 @@ def semantic_search(
     except Exception as e:
         return f"Embedding error: {e}"
 
-    # 2. Query S3 Vectors — fetch more if filtering, trim after
+    # 2. Query S3 Vectors
     fetch_k = top_k * 3 if (source or entity) else top_k
     try:
         result  = _s3vectors.query_vectors(
@@ -818,7 +824,8 @@ def semantic_search(
         )
         matches = result.get("vectors", [])
     except Exception as e:
-        if "empty" in str(e).lower() or "ResourceNotFoundException" in str(e):
+        if "empty" in str(e).lower() or \
+           "ResourceNotFoundException" in str(e):
             return (
                 "Vector index is not yet populated. "
                 "Run etl_embed.py to embed documents first."
@@ -846,7 +853,7 @@ def semantic_search(
         f"Top {len(matches)} results:\n"
     ]
     for i, match in enumerate(matches, 1):
-        meta  = match.get("metadata", {})
+        meta     = match.get("metadata", {})
         distance = match.get("distance", 0)
         lines.append(
             f"[{i}] {meta.get('title', 'Unknown')} "
