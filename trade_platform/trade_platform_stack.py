@@ -262,6 +262,193 @@ class TradePlatformStack(Stack):
         )
         sec_prose_crawler.add_dependency(sec_prose_db)
 
+# ── FedSpeak CDK additions ────────────────────────────────────────────────────
+# Add these blocks to trade_platform_stack.py in the appropriate sections.
+# Placement notes are included as comments.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. AFTER the sec_prose_crawler block — new raw + processed buckets
+# ─────────────────────────────────────────────────────────────────────────────
+
+        fedspeak_raw_bucket = s3.Bucket(
+            self, "FedSpeakRawBucket",
+            bucket_name=f"{env_name}-trade-fedspeak-raw-{Aws.ACCOUNT_ID}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        fedspeak_raw_bucket.grant_read_write(job_role)
+        fedspeak_raw_bucket.grant_read(glue_role)
+
+        fedspeak_processed_bucket = s3.Bucket(
+            self, "FedSpeakProcessedBucket",
+            bucket_name=f"{env_name}-trade-fedspeak-processed-{Aws.ACCOUNT_ID}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        fedspeak_processed_bucket.grant_read_write(job_role)
+        fedspeak_processed_bucket.grant_read(glue_role)
+
+        # Glue database for FedSpeak
+        fedspeak_db = glue.CfnDatabase(
+            self, "FedSpeakGlueDb",
+            catalog_id=self.account,
+            database_input=glue.CfnDatabase.DatabaseInputProperty(
+                name=f"{env_name}_trade_fedspeak_processed",
+                description=f"[{env_name}] FOMC minutes, statements, transcripts, speeches",
+            ),
+        )
+
+        # Crawler for FedSpeak processed
+        fedspeak_crawler = glue.CfnCrawler(
+            self, "FedSpeakCrawler",
+            name=f"{env_name}-trade-fedspeak-processed-crawler",
+            role=glue_role.role_arn,
+            database_name=f"{env_name}_trade_fedspeak_processed",
+            targets=glue.CfnCrawler.TargetsProperty(
+                s3_targets=[
+                    glue.CfnCrawler.S3TargetProperty(
+                        path=f"s3://{env_name}-trade-fedspeak-processed-{Aws.ACCOUNT_ID}/documents/",
+                    )
+                ]
+            ),
+            description=f"[{env_name}] Crawler for FedSpeak documents",
+            schedule=glue.CfnCrawler.ScheduleProperty(
+                schedule_expression="cron(0 3 * * ? *)",  # 3 AM UTC daily
+            ),
+            schema_change_policy=glue.CfnCrawler.SchemaChangePolicyProperty(
+                update_behavior="LOG",
+                delete_behavior="LOG",
+            ),
+            recrawl_policy=glue.CfnCrawler.RecrawlPolicyProperty(
+                recrawl_behavior="CRAWL_EVERYTHING",
+            ),
+        )
+        fedspeak_crawler.add_dependency(fedspeak_db)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. AFTER the etl_embed_asset block — new script assets
+# ─────────────────────────────────────────────────────────────────────────────
+
+        ingest_fedspeak_asset = s3_assets.Asset(
+            self, "FedSpeakScriptAsset",
+            path="ingestion/scripts/ingest_fedspeak.py",
+        )
+        ingest_fedspeak_asset.grant_read(job_role)
+
+        etl_fedspeak_asset = s3_assets.Asset(
+            self, "FedSpeakEtlScriptAsset",
+            path="ingestion/etl/etl_fedspeak.py",
+        )
+        etl_fedspeak_asset.grant_read(job_role)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. AFTER the ON_DEMAND manual triggers block — FedSpeak jobs + triggers
+# ─────────────────────────────────────────────────────────────────────────────
+
+        # FedSpeak ingestion job
+        # pypdf needed for PDF text extraction (Fed minutes, transcripts)
+        FEDSPEAK_MODULES = (
+            "pandas==2.0.3,"
+            "pyarrow==14.0.2,"
+            "pyyaml>=6.0.0,"
+            "pypdf>=3.0.0"
+        )
+
+        fedspeak_ingest_job = glue.CfnJob(
+            self, "FedSpeakIngestionJob",
+            name=f"{env_name}-trade-fedspeak-ingestion",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{ingest_fedspeak_asset.s3_bucket_name}"
+                    f"/{ingest_fedspeak_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": FEDSPEAK_MODULES,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=30,
+            description=f"[{env_name}] FedSpeak ingestion — FOMC calendar + speeches RSS",
+        )
+
+        # FedSpeak ETL job
+        fedspeak_etl_job = glue.CfnJob(
+            self, "FedSpeakEtlJob",
+            name=f"{env_name}-trade-fedspeak-etl",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{etl_fedspeak_asset.s3_bucket_name}"
+                    f"/{etl_fedspeak_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_BASE,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=30,
+            description=f"[{env_name}] FedSpeak raw JSON → Parquet ETL",
+        )
+
+        # Trigger: ingest_fedspeak → etl_fedspeak
+        glue.CfnTrigger(
+            self, "FedSpeakEtlTrigger",
+            name=f"{env_name}-trade-fedspeak-etl-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(job_name=fedspeak_etl_job.ref)],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="AND",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=fedspeak_ingest_job.ref,
+                        state="SUCCEEDED",
+                    )
+                ],
+            ),
+            description=f"[{env_name}] Fire etl_fedspeak after ingest_fedspeak succeeds",
+        )
+
+        # ON_DEMAND manual trigger — entry point for manual runs
+        glue.CfnTrigger(
+            self, "FedSpeakManualTrigger",
+            name=f"{env_name}-trade-fedspeak-manual-trigger",
+            type="ON_DEMAND",
+            actions=[glue.CfnTrigger.ActionProperty(
+                job_name=fedspeak_ingest_job.ref
+            )],
+            description=(
+                f"[{env_name}] Manual entry point for FedSpeak ingestion "
+                f"— fires conditional ETL chain"
+            ),
+        )        
+
         # ── DynamoDB conversation memory table (Phase 5 — agent memory) ───────
         conversation_table = dynamodb.Table(
             self, "ConversationTable",

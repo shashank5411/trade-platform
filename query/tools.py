@@ -464,6 +464,56 @@ TOOLS = [
             "required": ["query"]
         }
     },
+
+    
+{
+    "name": "get_fed_communications",
+    "description": (
+        "Retrieve Federal Reserve communications: FOMC statements (rate decisions), "
+        "minutes (full meeting deliberation), press conference transcripts, and "
+        "individual governor speeches. Use for questions about Fed policy, rate "
+        "decisions, Powell statements, inflation outlook from the Fed, or any "
+        "'what has the Fed said about X' question. Prefer over semantic_search "
+        "for targeted Fed document retrieval. "
+        "doc_type options: 'statement' | 'minutes' | 'transcript' | 'speech'. "
+        "entity: 'FOMC' for committee documents, speaker name for speeches "
+        "(e.g. 'Powell', 'Waller', 'Jefferson'). "
+        "Returns up to 8,000 chars per document."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "doc_type": {
+                "type": "string",
+                "enum": ["statement", "minutes", "transcript", "speech"],
+                "description": "Type of Fed communication to retrieve. Omit to search all types.",
+            },
+            "start": {
+                "type": "string",
+                "description": "Start date YYYY-MM-DD",
+            },
+            "end": {
+                "type": "string",
+                "description": "End date YYYY-MM-DD",
+            },
+            "entity": {
+                "type": "string",
+                "description": (
+                    "'FOMC' for committee documents (statements, minutes, transcripts). "
+                    "Speaker name for speeches: 'Powell', 'Waller', 'Jefferson', "
+                    "'Bowman', 'Cook', 'Kugler', 'Barr'. "
+                    "Omit to search all entities."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max documents to return (default 5, max 10)",
+                "default": 5,
+            },
+        },
+        "required": [],
+    },
+}
 ]
 
 

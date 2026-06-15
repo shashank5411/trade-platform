@@ -1,0 +1,19 @@
+# ingestion/configs/sources/fedspeak.yaml
+
+default_start_date:
+  dev:  "2020-01-01"
+  prod: "2000-01-01"
+
+frequency: event_driven   # not periodic — tied to FOMC calendar
+
+doc_types:
+  - statements            # rate decision statement, same day as meeting
+  - minutes               # full deliberation, released 3 weeks after meeting
+  - transcripts           # press conference Q&A, released ~5 years after meeting
+  - speeches              # individual governor speeches, continuous
+
+sources:
+  calendar_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+  speeches_rss: "https://www.federalreserve.gov/feeds/speeches.xml"
+
+schedule: "cron(0 6 ? * MON *)"   # weekly Monday, same as Wikipedia
