@@ -36,6 +36,7 @@ registry = get_registry()
 MARKET_TOOLS = [t for t in TOOLS if t["name"] in {
     "get_prices",
     "get_prices_multi",
+    "get_prices_by_sector",
     "get_price_on_date",
     "get_prices_on_date",
 }]
@@ -48,11 +49,12 @@ MACRO_TOOLS = [t for t in TOOLS if t["name"] in {
 }]
 
 FILINGS_TOOLS = [t for t in TOOLS if t["name"] in {
+    "get_fed_communications",  # FOMC statements, minutes, transcripts, speeches
     "get_documents",
-    "get_prose",             # targeted section retrieval from 10-K/10-Q
+    "get_prose",               # targeted section retrieval from 10-K/10-Q
     "semantic_search",
-    "get_prices",           # for context — price at time of filing
-    "get_macro_snapshot",   # for context — macro at time of filing
+    "get_prices",              # for context — price at time of filing
+    "get_macro_snapshot",      # for context — macro at time of filing
 }]
 
 

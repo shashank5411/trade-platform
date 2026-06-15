@@ -5,15 +5,17 @@ Reads canonical document rows from:
   SEC EDGAR processed bucket       (documents/)
   Wikipedia processed bucket       (documents/)
   SEC prose processed bucket       (documents_prose/) — Phase 7
+  FedSpeak processed bucket        (documents/source=FEDSPEAK/) — Phase 8
 
 Chunks text per source strategy:
   EDGAR:     section-level (Item X. headers), max 400 tokens, 50 overlap
   WIKIPEDIA: paragraph-level (\\n\\n splits), max 350 tokens, 30 overlap
+  FEDSPEAK:  statement → single chunk; minutes/transcript/speech → paragraph split
 
 Embeds each chunk with Bedrock Cohere Embed English v3 (1024 dims).
 Writes vectors to S3 Vectors index: documents-index.
 
-Run after etl_sec.py, etl_wikipedia.py, and etl_sec_prose.py.
+Run after etl_sec.py, etl_wikipedia.py, etl_sec_prose.py, and etl_fedspeak.py.
 """
 import sys
 import os
@@ -69,8 +71,10 @@ SEC_PROC_BUCKET  = _arg("sec_processed_bucket",
     f"{ENV}-trade-sec-processed-{ACCOUNT}")
 WIKI_PROC_BUCKET = _arg("wiki_processed_bucket",
     f"{ENV}-trade-wikipedia-processed-{ACCOUNT}")
-PROSE_BUCKET     = _arg("prose_bucket",
+PROSE_BUCKET         = _arg("prose_bucket",
     f"{ENV}-trade-sec-prose-processed-{ACCOUNT}")
+FEDSPEAK_PROC_BUCKET = _arg("fedspeak_processed_bucket",
+    f"{ENV}-trade-fedspeak-processed-{ACCOUNT}")
 
 # S3 Vectors
 VECTOR_BUCKET = _arg("vector_bucket",
@@ -84,10 +88,12 @@ EMBED_BATCH_SIZE = 10
 MAX_TOKENS_PER_CHUNK = {
     "EDGAR":     400,
     "WIKIPEDIA": 350,
+    "FEDSPEAK":  350,
 }
 OVERLAP_TOKENS = {
     "EDGAR":     50,
     "WIKIPEDIA": 30,
+    "FEDSPEAK":  30,
 }
 
 s3        = boto3.client("s3",              region_name=REGION)
@@ -226,6 +232,73 @@ def chunk_wikipedia(text: str, doc_id: str) -> list:
             "text":     buffer,
             "section":  chunk_idx,
         })
+
+    return chunks
+
+
+def chunk_fedspeak(text: str, doc_id: str, doc_type: str) -> list:
+    """
+    Chunking strategy for FedSpeak documents.
+      statement            — short (~500-2000 chars), embed as single chunk
+      minutes/transcript   — long (~15k-40k chars), paragraph split + sliding fallback
+      speech               — medium (~3k-8k chars), paragraph split + sliding fallback
+    doc_type comes from the S3 partition path (not the Parquet schema).
+    """
+    if not text or len(text) < 50:
+        return []
+
+    if doc_type == "statement":
+        return [{
+            "chunk_id": f"{doc_id}_p0",
+            "doc_id":   doc_id,
+            "text":     text,
+            "section":  0,
+        }]
+
+    # minutes, transcripts, speeches — paragraph split, same strategy as Wikipedia
+    max_tok    = MAX_TOKENS_PER_CHUNK["FEDSPEAK"]
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+
+    chunks    = []
+    chunk_idx = 0
+    buffer    = ""
+
+    for para in paragraphs:
+        candidate = (buffer + "\n\n" + para).strip() if buffer else para
+        if approx_tokens(candidate) <= max_tok:
+            buffer = candidate
+        else:
+            if buffer:
+                chunks.append({
+                    "chunk_id": f"{doc_id}_p{chunk_idx}",
+                    "doc_id":   doc_id,
+                    "text":     buffer,
+                    "section":  chunk_idx,
+                })
+                chunk_idx += 1
+            if approx_tokens(para) > max_tok:
+                sub = chunk_sliding(
+                    para,
+                    f"{doc_id}_p{chunk_idx}",
+                    "FEDSPEAK",
+                    root_doc_id=doc_id,
+                )
+                chunks.extend(sub)
+                chunk_idx += len(sub)
+                buffer = ""
+            else:
+                buffer = para
+
+    if buffer:
+        chunks.append({
+            "chunk_id": f"{doc_id}_p{chunk_idx}",
+            "doc_id":   doc_id,
+            "text":     buffer,
+            "section":  chunk_idx,
+        })
+
+    if not chunks:
+        chunks = chunk_sliding(text, doc_id, "FEDSPEAK", root_doc_id=doc_id)
 
     return chunks
 
@@ -476,6 +549,49 @@ def main():
                     total_docs += 1
                 else:
                     total_skipped += 1
+
+    # ── Read FedSpeak documents ────────────────────────────────────────────
+    # entity is a Parquet column (row.get works directly).
+    # doc_type and source are partition columns — extracted from the S3 key.
+    print("\nReading FedSpeak documents...")
+    fedspeak_df, fedspeak_keys = read_processed_docs(
+        FEDSPEAK_PROC_BUCKET, "documents/source=FEDSPEAK/"
+    )
+
+    # Build doc_type lookup from Hive partition path
+    fedspeak_key_doctype = {}
+    for key in fedspeak_keys:
+        match = re.search(r'doc_type=([^/]+)/', key)
+        if match:
+            fedspeak_key_doctype[key] = match.group(1)
+
+    if not fedspeak_df.empty:
+        for _, row in fedspeak_df.iterrows():
+            doc_id   = str(row["doc_id"])
+            doc_type = fedspeak_key_doctype.get(row["_source_key"], "")
+            entity   = str(row.get("entity", "FOMC"))
+
+            if FILTER_ENTITY and entity.upper() != FILTER_ENTITY.upper():
+                total_skipped += 1
+                continue
+
+            doc_metadata[doc_id] = {
+                "source":   "FEDSPEAK",
+                "entity":   entity,
+                "doc_type": doc_type,
+                "doc_date": str(row.get("doc_date", "")),
+                "title":    str(row.get("title", "")),
+            }
+            text = str(row.get("text", ""))
+            if text and len(text) >= 50:
+                chunks = chunk_fedspeak(text, doc_id, doc_type)
+                if chunks:
+                    all_chunks.extend(chunks)
+                    total_docs += 1
+                else:
+                    total_skipped += 1
+            else:
+                total_skipped += 1
 
     # ── Read SEC prose sections ────────────────────────────────────────────
     print("\nReading SEC prose sections...")

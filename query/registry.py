@@ -38,15 +38,22 @@ AGENT_REGISTRY = {
     "filings": {
         "agent":       filings_agent,
         "description": (
-            "Answers qualitative questions using SEC filings and Wikipedia "
-            "articles. Has access to 10-K and 10-Q filings for AAPL, MSFT, "
+            "Answers qualitative questions using SEC filings, Wikipedia "
+            "articles, and Fed communications. "
+            "IMPORTANT: this is the ONLY agent that can retrieve what the "
+            "Fed has SAID — use it for any question about FOMC statements, "
+            "Fed minutes, Powell speeches, Fed governor speeches, Fed policy "
+            "reasoning, Fed commentary on inflation or the economy, or any "
+            "'what has the Fed said about X' question. Has get_fed_communications "
+            "tool for targeted Fed document retrieval. "
+            "Also has access to 10-K and 10-Q filings for AAPL, MSFT, "
             "GOOGL, AMZN, JPM, BAC, XOM, and Wikipedia articles on "
             "Inflation, Recession, Federal Reserve, Quantitative Easing, "
             "2008 financial crisis, COVID-19 recession, Silicon Valley Bank. "
             "Uses semantic search for meaning-based retrieval across all "
-            "documents. Use for: business strategy, risk factors, company "
-            "narratives, economic concept explanations, historical event "
-            "analysis."
+            "documents. Use for: Fed communications, business strategy, "
+            "risk factors, company narratives, economic concept explanations, "
+            "historical event analysis."
         ),
     },
 }

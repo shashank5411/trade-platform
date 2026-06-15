@@ -16,8 +16,10 @@ TOOLS = [
             ">365 days → monthly aggregation. "
             "Returns summary stats (start/end price, % change, high, low) "
             "plus aggregated price table. "
+            "Supports optional sector and industry filters (e.g. sector='Technology'). "
             "Use for trend and performance questions over a period. "
             "For MULTIPLE tickers use get_prices_multi. "
+            "For SECTOR-LEVEL queries use get_prices_by_sector. "
             "For a SPECIFIC DATE use get_price_on_date."
         ),
         "input_schema": {
@@ -38,6 +40,14 @@ TOOLS = [
                 "exchange": {
                     "type": "string",
                     "description": "Optional. NYSE, NASDAQ, LSE, NSE. Omit for US stocks."
+                },
+                "sector": {
+                    "type": "string",
+                    "description": "Optional. Filter by sector e.g. Technology, Energy, Financials."
+                },
+                "industry": {
+                    "type": "string",
+                    "description": "Optional. Filter by industry e.g. Semiconductors, Oil & Gas."
                 }
             },
             "required": ["ticker", "start", "end"]
@@ -52,8 +62,10 @@ TOOLS = [
             "Returns per-ticker summary stats plus combined price table. "
             "Use for comparison questions: 'compare AAPL vs MSFT', "
             "'how did tech stocks perform', 'show me all my holdings'. "
+            "Supports optional sector and industry filters. "
             "More efficient than calling get_prices multiple times. "
             "For a SINGLE ticker use get_prices instead. "
+            "For SECTOR-LEVEL discovery use get_prices_by_sector. "
             "For a SPECIFIC DATE use get_prices_on_date."
         ),
         "input_schema": {
@@ -75,9 +87,63 @@ TOOLS = [
                 "exchange": {
                     "type": "string",
                     "description": "Optional. Filter all tickers to same exchange."
+                },
+                "sector": {
+                    "type": "string",
+                    "description": "Optional. Filter by sector e.g. Technology, Energy, Financials."
+                },
+                "industry": {
+                    "type": "string",
+                    "description": "Optional. Filter by industry e.g. Semiconductors, Oil & Gas."
                 }
             },
             "required": ["tickers", "start", "end"]
+        }
+    },
+
+    {
+        "name": "get_prices_by_sector",
+        "description": (
+            "Fetch a performance summary for ALL tickers in a SECTOR over a DATE RANGE. "
+            "Returns one row per ticker with avg close, start/end price, and % change "
+            "for the period — ranked by performance. Up to 20 tickers. "
+            "Use for sector-level questions: 'how are tech stocks doing?', "
+            "'show me energy companies this year', 'which financials performed best?', "
+            "'compare semiconductor stocks over Q1'. "
+            "Optionally narrow by industry within the sector. "
+            "For SPECIFIC TICKERS you already know, use get_prices or get_prices_multi. "
+            "For a SINGLE ticker use get_prices."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sector": {
+                    "type": "string",
+                    "description": (
+                        "Sector name exactly as stored. Examples: Technology, Energy, "
+                        "Financials, Health Care, Consumer Discretionary, Industrials, "
+                        "Communication Services, Utilities, Real Estate, Materials, "
+                        "Consumer Staples."
+                    )
+                },
+                "start": {
+                    "type": "string",
+                    "description": "Start date inclusive. Format: YYYY-MM-DD"
+                },
+                "end": {
+                    "type": "string",
+                    "description": "End date inclusive. Format: YYYY-MM-DD"
+                },
+                "industry": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Narrow to a specific industry within the sector. "
+                        "Examples: Semiconductors, Oil & Gas Integrated, "
+                        "Internet Content & Information, Banks—Diversified."
+                    )
+                }
+            },
+            "required": ["sector", "start", "end"]
         }
     },
 
@@ -430,13 +496,19 @@ TOOLS = [
     {
         "name": "semantic_search",
         "description": (
-            "Semantic search over SEC EDGAR filings and Wikipedia articles. "
+            "Semantic search over SEC EDGAR filings, Wikipedia articles, and "
+            "FedSpeak documents (FOMC minutes, statements, press conference "
+            "transcripts, Fed governor speeches). "
             "Use for qualitative questions: company strategy, risk factors, "
-            "business descriptions, economic concepts, historical events. "
+            "business descriptions, economic concepts, historical events, "
+            "Fed policy reasoning and commentary. "
             "Complements get_documents (which does exact entity lookup) by "
             "finding relevant content across all documents by meaning. "
+            "Prefer get_fed_communications for targeted Fed document retrieval; "
+            "use semantic_search with source='FEDSPEAK' for broad Fed concept search. "
             "Examples: 'Apple revenue recognition policy', "
             "'quantitative easing effects on inflation', "
+            "'Fed stance on inflation 2022', "
             "'JPMorgan risk factors 2022'."
         ),
         "input_schema": {
@@ -453,8 +525,8 @@ TOOLS = [
                 },
                 "source": {
                     "type": "string",
-                    "description": "Filter by source: EDGAR or WIKIPEDIA (optional)",
-                    "enum": ["EDGAR", "WIKIPEDIA"]
+                    "description": "Filter by source: EDGAR (SEC filings), WIKIPEDIA, or FEDSPEAK (Fed communications) — optional",
+                    "enum": ["EDGAR", "WIKIPEDIA", "FEDSPEAK"]
                 },
                 "entity": {
                     "type": "string",
@@ -523,6 +595,7 @@ def get_registry():
     return {
         "get_prices":              api.get_prices,
         "get_prices_multi":        api.get_prices_multi,
+        "get_prices_by_sector":    api.get_prices_by_sector,
         "get_price_on_date":       api.get_price_on_date,
         "get_prices_on_date":      api.get_prices_on_date,
         "get_indicator":           api.get_indicator,
@@ -532,4 +605,5 @@ def get_registry():
         "get_documents":           api.get_documents,
         "get_prose":               api.get_prose,
         "semantic_search":         api.semantic_search,
+        "get_fed_communications":  api.get_fed_communications,
     }

@@ -186,12 +186,16 @@ def get_prices(
     ticker:   str,
     start:    str,
     end:      str,
-    exchange: Optional[str] = None
+    exchange: Optional[str] = None,
+    sector:   Optional[str] = None,
+    industry: Optional[str] = None,
 ) -> str:
-    ticker      = ticker.upper()
-    granularity = _price_granularity(start, end)
-    yf          = _year_filter(start, end)
-    ex_filter   = f"AND exchange = '{exchange}'" if exchange else ""
+    ticker          = ticker.upper()
+    granularity     = _price_granularity(start, end)
+    yf              = _year_filter(start, end)
+    ex_filter       = f"AND exchange = '{exchange}'"  if exchange  else ""
+    sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
+    industry_filter = f"AND industry = '{industry}'" if industry  else ""
 
     if granularity == "daily":
         sql = f"""
@@ -200,6 +204,7 @@ def get_prices(
             FROM   market_prices
             WHERE  ticker = '{ticker}'
               {yf} {ex_filter}
+              {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             ORDER BY date ASC
         """
@@ -216,6 +221,7 @@ def get_prices(
             FROM   market_prices
             WHERE  ticker = '{ticker}'
               {yf} {ex_filter}
+              {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
                      DATE_TRUNC('week', CAST(date AS DATE))
@@ -234,6 +240,7 @@ def get_prices(
             FROM   market_prices
             WHERE  ticker = '{ticker}'
               {yf} {ex_filter}
+              {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
                      DATE_TRUNC('month', CAST(date AS DATE))
@@ -251,13 +258,17 @@ def get_prices_multi(
     tickers:  list,
     start:    str,
     end:      str,
-    exchange: Optional[str] = None
+    exchange: Optional[str] = None,
+    sector:   Optional[str] = None,
+    industry: Optional[str] = None,
 ) -> str:
-    tickers     = [t.upper() for t in tickers]
-    ticker_list = "','".join(tickers)
-    granularity = _price_granularity(start, end)
-    yf          = _year_filter(start, end)
-    ex_filter   = f"AND exchange = '{exchange}'" if exchange else ""
+    tickers         = [t.upper() for t in tickers]
+    ticker_list     = "','".join(tickers)
+    granularity     = _price_granularity(start, end)
+    yf              = _year_filter(start, end)
+    ex_filter       = f"AND exchange = '{exchange}'"  if exchange  else ""
+    sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
+    industry_filter = f"AND industry = '{industry}'" if industry  else ""
 
     if granularity == "daily":
         sql = f"""
@@ -266,6 +277,7 @@ def get_prices_multi(
             FROM   market_prices
             WHERE  ticker IN ('{ticker_list}')
               {yf} {ex_filter}
+              {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             ORDER BY ticker ASC, date ASC
         """
@@ -282,6 +294,7 @@ def get_prices_multi(
             FROM   market_prices
             WHERE  ticker IN ('{ticker_list}')
               {yf} {ex_filter}
+              {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
                      DATE_TRUNC('week', CAST(date AS DATE))
@@ -300,6 +313,7 @@ def get_prices_multi(
             FROM   market_prices
             WHERE  ticker IN ('{ticker_list}')
               {yf} {ex_filter}
+              {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
                      DATE_TRUNC('month', CAST(date AS DATE))
@@ -323,6 +337,46 @@ def get_prices_multi(
         )
     except Exception as e:
         return _athena_error_msg(e, f"fetching prices for {tickers}")
+
+
+def get_prices_by_sector(
+    sector:   str,
+    start:    str,
+    end:      str,
+    industry: Optional[str] = None,
+) -> str:
+    yf              = _year_filter(start, end)
+    industry_filter = f"AND industry = '{industry}'" if industry else ""
+
+    sql = f"""
+        SELECT ticker, sector, industry,
+               MIN_BY(close, date)  AS start_close,
+               MAX_BY(close, date)  AS end_close,
+               AVG(close)           AS avg_close,
+               (MAX_BY(close, date) - MIN_BY(close, date))
+                 / NULLIF(MIN_BY(close, date), 0) * 100 AS pct_change
+        FROM   market_prices
+        WHERE  sector = '{sector}'
+          {industry_filter}
+          {yf}
+          AND date BETWEEN '{start}' AND '{end}'
+        GROUP BY ticker, sector, industry
+        ORDER BY pct_change DESC
+        LIMIT  20
+    """
+
+    try:
+        df = query(sql, DB["yfinance"])
+        if df.empty:
+            return f"No price data found for sector '{sector}'."
+        header = (
+            f"Sector: {sector}"
+            + (f" | Industry: {industry}" if industry else "")
+            + f"\nPeriod: {start} → {end} | {len(df)} tickers\n"
+        )
+        return header + df.to_string(index=False)
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching prices for sector '{sector}'")
 
 
 def get_price_on_date(
@@ -862,8 +916,9 @@ def semantic_search(
     entity: Optional[str] = None,
 ) -> str:
     """
-    Semantic search over SEC filings and Wikipedia articles.
+    Semantic search over SEC filings, Wikipedia articles, and FedSpeak documents.
     Embeds query with Cohere v3, queries S3 Vectors index, returns top-K chunks.
+    source filter accepts: EDGAR, WIKIPEDIA, FEDSPEAK (or None for all).
     """
     # 1. Embed the query
     try:
