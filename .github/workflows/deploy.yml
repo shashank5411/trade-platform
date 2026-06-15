@@ -3,14 +3,26 @@ name: Deploy Trade Platform
 on:
   push:
     branches: [master]
+    paths:
+      - 'trade_platform/**'
+      - 'ingestion/**'
+      - 'requirements.txt'
+      - 'app.py'
+      - 'cdk.json'
   pull_request:
     branches: [master]
+    paths:
+      - 'trade_platform/**'
+      - 'ingestion/**'
+      - 'requirements.txt'
+      - 'app.py'
+      - 'cdk.json'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write   # required for OIDC
+      id-token: write
       contents: read
 
     steps:
@@ -45,10 +57,3 @@ jobs:
       - name: CDK deploy (master only)
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         run: cdk deploy TradePlatformStack-dev --require-approval never
-
-      - name: Package and upload Glue zip (master only)
-        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-        run: |
-          cd ingestion
-          zip -r ../glue_libs.zip .
-          aws s3 cp ../glue_libs.zip s3://dev-trade-glue-assets-197411402303/glue_libs.zip || echo "Upload skipped — bucket may not exist yet"
