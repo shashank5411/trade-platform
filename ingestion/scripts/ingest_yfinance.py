@@ -42,14 +42,18 @@ EXCHANGE_NORMALIZE = {
 
 def fetch_ticker_meta(ticker: str) -> dict:
     try:
-        info   = yf.Ticker(ticker).fast_info
-        raw_ex = getattr(info, "exchange", "NMS")
+        t      = yf.Ticker(ticker)
+        fast   = t.fast_info
+        raw_ex = getattr(fast, "exchange", "NMS")
+        info   = t.info
         return {
             "exchange": EXCHANGE_NORMALIZE.get(raw_ex, "NASDAQ"),
-            "currency": getattr(info, "currency", "USD"),
+            "currency": getattr(fast, "currency", "USD"),
+            "sector":   info.get("sector", ""),
+            "industry": info.get("industry", ""),
         }
     except Exception:
-        return {"exchange": "NASDAQ", "currency": "USD"}
+        return {"exchange": "NASDAQ", "currency": "USD", "sector": "", "industry": ""}
 
 
 def _arg(name: str, default: str = "") -> str:
@@ -121,6 +125,8 @@ def fetch_market_data(tickers: list, start: str, end: str) -> dict[str, list]:
         for r in records:
             r["exchange"] = meta["exchange"]
             r["currency"] = meta["currency"]
+            r["sector"]   = meta["sector"]
+            r["industry"] = meta["industry"]
 
     total = sum(len(v) for v in per_ticker.values())
     print(f"  {total} OHLCV rows across {len(tickers)} tickers")

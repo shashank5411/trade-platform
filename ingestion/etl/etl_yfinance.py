@@ -231,6 +231,8 @@ def transform(records: list, config: dict) -> list:
 
         meta      = EXCHANGE_META.get(exchange, EXCHANGE_META["NASDAQ"])
         currency  = rec.get("currency") or meta["currency"]
+        sector    = rec.get("sector", "") if instrument == "equity" else ""
+        industry  = rec.get("industry", "") if instrument == "equity" else ""
         volume    = rec.get("Volume")
         adj_close = safe_float(rec.get("Close"))
 
@@ -242,6 +244,8 @@ def transform(records: list, config: dict) -> list:
             "country":     "US"      if instrument in ("index", "futures", "fx")
                            else meta["country"],
             "currency":    currency,
+            "sector":      sector,
+            "industry":    industry,
             "open":        safe_float(rec.get("Open")),
             "high":        safe_float(rec.get("High")),
             "low":         safe_float(rec.get("Low")),
