@@ -80,6 +80,24 @@ class TradePlatformStack(Stack):
             for bucket in layer_buckets.values():
                 bucket.grant_read(glue_role)
 
+        # GitHub Actions OIDC Deploy Role        
+        github_actions_role = iam.Role(
+            self, "GitHubActionsDeployRole",
+            role_name=f"GitHubActionsDeployRole-{env_name}",
+            assumed_by=iam.WebIdentityPrincipal(
+                f"arn:aws:iam::{Aws.ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com",
+                conditions={
+                    "StringEquals": {
+                        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                        "token.actions.githubusercontent.com:sub":
+                            "repo:shashank5411/trade-platform:ref:refs/heads/master"
+                    }
+                }
+            ),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess")
+            ]
+        )
         # ── Glue crawlers (raw + processed, one per source) ───────────────────
         for layer in LAYERS:
             for source in SOURCES:
@@ -381,7 +399,7 @@ class TradePlatformStack(Stack):
         )
         etl_embed_asset.grant_read(job_role)
 
-        # ── Glue Python Shell ingestion jobs ──────────────────────────────────
+    # ── Glue Python Shell ingestion jobs ──────────────────────────────────
     # Base modules for all jobs
         ADDITIONAL_MODULES = (
             "yfinance>=0.2.0,"

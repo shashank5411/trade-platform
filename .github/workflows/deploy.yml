@@ -1,0 +1,54 @@
+name: Deploy Trade Platform
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for OIDC
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::197411402303:role/GitHubActionsDeployRole-dev
+          aws-region: us-east-2
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CDK dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set up Node.js (CDK CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: CDK diff (all branches)
+        run: cdk diff TradePlatformStack-dev
+
+      - name: CDK deploy (master only)
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: cdk deploy TradePlatformStack-dev --require-approval never
+
+      - name: Package and upload Glue zip (master only)
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: |
+          cd ingestion
+          zip -r ../glue_libs.zip .
+          aws s3 cp ../glue_libs.zip s3://dev-trade-glue-assets-197411402303/glue_libs.zip || echo "Upload skipped — bucket may not exist yet"
