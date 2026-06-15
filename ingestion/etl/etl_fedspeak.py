@@ -54,14 +54,11 @@ _arg_parser()
 # ── Canonical schema ──────────────────────────────────────────────────────────
 SCHEMA = pa.schema([
     pa.field("doc_id",      pa.string()),
-    pa.field("source",      pa.string()),   # FEDSPEAK
     pa.field("entity",      pa.string()),   # FOMC | Powell | Waller | ...
-    pa.field("doc_type",    pa.string()),   # statement | minutes | transcript | speech
     pa.field("doc_date",    pa.string()),   # YYYY-MM-DD
     pa.field("title",       pa.string()),
     pa.field("text",        pa.string()),
     pa.field("char_count",  pa.int32()),
-    pa.field("year",        pa.int32()),    # partition key
     pa.field("url",         pa.string()),
     pa.field("ingested_at", pa.string()),
 ])
@@ -127,7 +124,6 @@ def write_partition(rows: list, year: int, doc_type: str) -> None:
 
     # Cast types
     df["char_count"] = df["char_count"].fillna(0).astype("int32")
-    df["year"]       = df["year"].fillna(year).astype("int32")
 
     table = pa.Table.from_pandas(df[
         [f.name for f in SCHEMA]
@@ -179,14 +175,11 @@ def main():
 
         row = {
             "doc_id":      doc.get("doc_id", ""),
-            "source":      "FEDSPEAK",
             "entity":      doc.get("entity", "FOMC"),
-            "doc_type":    doc.get("doc_type", ""),
             "doc_date":    doc_date,
             "title":       doc.get("title", ""),
             "text":        text,
             "char_count":  len(text),
-            "year":        year,
             "url":         doc.get("url", ""),
             "ingested_at": doc.get("ingested_at", ""),
         }

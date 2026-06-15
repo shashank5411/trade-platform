@@ -115,6 +115,25 @@ SOURCE_CONFIG = {
             f"{ENV}-trade-sec-embed-etl": "etl_embed",
         },
     },
+    "fedspeak": {
+        "ingest_job":    f"{ENV}-trade-fedspeak-ingestion",
+        "etl_job":       f"{ENV}-trade-fedspeak-etl",
+        "etl_trigger":   f"{ENV}-trade-fedspeak-etl-trigger",
+        "raw_bucket":    f"{ENV}-trade-fedspeak-raw-{ACCOUNT_ID}",
+        "proc_bucket":   f"{ENV}-trade-fedspeak-processed-{ACCOUNT_ID}",
+        "proc_prefix":   "documents/",
+        "crawler":       f"{ENV}-trade-fedspeak-processed-crawler",
+        "athena_db":     f"{ENV}_trade_fedspeak_processed",
+        "athena_table":  "documents",
+        "athena_query":  (
+            "SELECT COUNT(*) as cnt, doc_type, year FROM documents"
+            " WHERE source='FEDSPEAK'"
+            " GROUP BY doc_type, year"
+            " ORDER BY year DESC, doc_type"
+        ),
+        "tracker":       None,
+        "watermark_source": None,  # uses S3 tracker/ingested_ids.json
+    },
 }
 
 
@@ -198,6 +217,18 @@ def get_sec_tracker(bucket: str, ticker: str = "AAPL") -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def get_fedspeak_tracker(bucket: str) -> dict:
+    try:
+        obj = s3.get_object(Bucket=bucket, Key="tracker/ingested_ids.json")
+        data = json.loads(obj["Body"].read())
+        count = len(data) if isinstance(data, list) else len(data)
+        return {"count": count, "found": True}
+    except s3.exceptions.NoSuchKey:
+        return {"found": False, "error": "tracker/ingested_ids.json not found"}
+    except Exception as e:
+        return {"found": False, "error": str(e)}
 
 
 def get_crawler_status(crawler_name: str) -> dict:
@@ -440,6 +471,14 @@ def verify(source: str, run_crawler_flag: bool = False):
             print(f"      last_ingest:    {t['last_ingest']}")
             print(f"      last_etl:       {t['last_etl']}")
             print(f"      last_prose_etl: {t['last_prose_etl']}")
+        else:
+            print(f"   ❌ {t['error']}")
+
+    elif cfg.get("watermark_source") is None and not cfg.get("tracker"):
+        print("\n5. S3 INGESTED-IDS TRACKER")
+        t = get_fedspeak_tracker(cfg["raw_bucket"])
+        if t["found"]:
+            print(f"   ✅ {t['count']} ingested IDs in tracker/ingested_ids.json")
         else:
             print(f"   ❌ {t['error']}")
 
