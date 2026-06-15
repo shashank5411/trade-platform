@@ -677,6 +677,77 @@ def get_documents(
         )
     return "\n\n".join(output)
 
+def get_fed_communications(
+    doc_type: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    entity: Optional[str] = None,
+    limit: int = 5,
+) -> str:
+    """
+    Retrieve FOMC statements, minutes, transcripts, or Fed governor speeches.
+ 
+    Args:
+        doc_type: "statement" | "minutes" | "transcript" | "speech" | None (all)
+        start:    YYYY-MM-DD start date filter
+        end:      YYYY-MM-DD end date filter
+        entity:   "FOMC" for committee docs, or speaker name for speeches
+        limit:    max number of documents to return (default 5)
+    """
+    db      = f"{ENV}_trade_fedspeak_processed"
+    table   = "documents"
+    filters = ["source = 'FEDSPEAK'"]
+ 
+    if doc_type:
+        filters.append(f"doc_type = '{doc_type}'")
+    if entity:
+        filters.append(f"entity = '{entity}'")
+    if start:
+        filters.append(f"doc_date >= '{start}'")
+    if end:
+        filters.append(f"doc_date <= '{end}'")
+ 
+    where = " AND ".join(filters)
+    sql = f"""
+        SELECT doc_id, entity, doc_type, doc_date, title,
+               SUBSTR(text, 1, 8000) AS text_preview,
+               char_count, url
+        FROM {db}.{table}
+        WHERE {where}
+        ORDER BY doc_date DESC
+        LIMIT {limit}
+    """
+ 
+    try:
+        df = run_query(sql)
+    except Exception as e:
+        return f"Error querying FedSpeak: {e}"
+ 
+    if df.empty:
+        return (
+            f"No Fed communications found"
+            + (f" of type '{doc_type}'" if doc_type else "")
+            + (f" from {start}" if start else "")
+            + (f" to {end}" if end else "")
+            + ". The FedSpeak pipeline may not have run yet."
+        )
+ 
+    results = []
+    for _, row in df.iterrows():
+        results.append(
+            f"[{row['doc_type'].upper()}] {row['title']}\n"
+            f"Date: {row['doc_date']} | Entity: {row['entity']} "
+            f"| {row['char_count']:,} chars\n"
+            f"URL: {row.get('url', 'N/A')}\n\n"
+            f"{row['text_preview']}\n"
+            f"{'─' * 60}"
+        )
+ 
+    return (
+        f"Found {len(df)} Fed communication(s):\n\n"
+        + "\n\n".join(results)
+    )
+ 
 
 # ══════════════════════════════════════════════════════════════════════════
 # PROSE TOOL
