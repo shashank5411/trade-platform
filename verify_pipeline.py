@@ -134,6 +134,28 @@ SOURCE_CONFIG = {
         "tracker":       None,
         "watermark_source": None,  # uses S3 tracker/ingested_ids.json
     },
+    "news": {
+        "ingest_job":    f"{ENV}-trade-news-ingestion",
+        "etl_job":       f"{ENV}-trade-news-etl",
+        "etl_trigger":   f"{ENV}-trade-news-etl-trigger",
+        "raw_bucket":    f"{ENV}-trade-news-raw-{ACCOUNT_ID}",
+        "proc_bucket":   f"{ENV}-trade-news-processed-{ACCOUNT_ID}",
+        "proc_prefix":   "news/",
+        "crawler":       f"{ENV}-trade-news-processed-crawler",
+        "athena_db":     f"{ENV}_trade_news_processed",
+        "athena_table":  "news",
+        "athena_query":  (
+            "SELECT primary_ticker, COUNT(*) as cnt,"
+            " SUM(CASE WHEN sentiment='positive' THEN 1 ELSE 0 END) as positive,"
+            " SUM(CASE WHEN sentiment='negative' THEN 1 ELSE 0 END) as negative,"
+            " SUM(CASE WHEN sentiment='neutral' THEN 1 ELSE 0 END) as neutral"
+            " FROM news"
+            " GROUP BY primary_ticker"
+            " ORDER BY cnt DESC"
+        ),
+        "tracker":       None,
+        "watermark_source": None,  # uses S3 tracker/ingested_ids.json
+    },
 }
 
 
