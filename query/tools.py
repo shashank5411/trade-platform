@@ -537,7 +537,75 @@ TOOLS = [
         }
     },
 
-    
+    # ── NEWS / SENTIMENT ───────────────────────────────────────────────────
+
+    {
+        "name": "get_news",
+        "description": (
+            "Retrieve news articles for a stock ticker with per-article sentiment "
+            "and reasoning. Use for: 'what is the news around AAPL this week', "
+            "'show me negative news about JPM', 'what are analysts saying about XOM'. "
+            "Covers: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM (equities) and "
+            "GLD (gold), USO (oil), TLT (bonds), SPY (broad market). "
+            "publisher_tier: 1=wire services (Reuters/AP/Bloomberg), "
+            "2=financial media (MarketWatch/Benzinga/CNBC), "
+            "3=opinion (Seeking Alpha/Motley Fool). "
+            "Use get_news_summary first for an overview, then get_news for details."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker. Examples: AAPL, JPM, GLD, SPY"
+                },
+                "start": {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "end":   {"type": "string", "description": "End date YYYY-MM-DD"},
+                "sentiment": {
+                    "type": "string",
+                    "enum": ["positive", "negative", "neutral"],
+                    "description": "Filter by sentiment"
+                },
+                "publisher_tier": {
+                    "type": "integer",
+                    "description": "Max publisher tier: 1=wire only, 2=established+wire, 3=all"
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "Max articles (default 10)"
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+
+    {
+        "name": "get_news_summary",
+        "description": (
+            "Get aggregated news sentiment overview for a ticker. Returns total "
+            "article count, sentiment breakdown (positive/negative/neutral counts), "
+            "and top publishers. Use FIRST before get_news to understand overall "
+            "narrative tone. Great for: 'has news been positive or negative for AAPL "
+            "this month?', 'how much coverage has JPM gotten?', 'what is the media "
+            "sentiment around XOM after the oil price drop?'"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker"},
+                "start":  {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "end":    {"type": "string", "description": "End date YYYY-MM-DD"},
+                "publisher_tier": {
+                    "type": "integer",
+                    "description": "Max publisher tier (1=wire only, 2=established, 3=all)"
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+
+
 {
     "name": "get_fed_communications",
     "description": (
@@ -606,4 +674,6 @@ def get_registry():
         "get_prose":               api.get_prose,
         "semantic_search":         api.semantic_search,
         "get_fed_communications":  api.get_fed_communications,
+        "get_news":                api.get_news,
+        "get_news_summary":        api.get_news_summary,
     }

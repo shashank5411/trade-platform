@@ -40,6 +40,7 @@ DB = {
     "wikipedia": f"{ENV}_trade_wikipedia_processed",
     "sec":       f"{ENV}_trade_sec_processed",
     "sec_prose": f"{ENV}_trade_sec_prose_processed",
+    "news":      f"{ENV}_trade_news_processed",
 }
 
 # ── Vector search ──────────────────────────────────────────────────────────
@@ -773,7 +774,7 @@ def get_fed_communications(
     """
  
     try:
-        df = run_query(sql)
+        df = query(sql, db)
     except Exception as e:
         return f"Error querying FedSpeak: {e}"
  
@@ -990,3 +991,143 @@ def semantic_search(
         )
 
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NEWS / SENTIMENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_news(
+    ticker: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    sentiment: Optional[str] = None,
+    publisher_tier: Optional[int] = None,
+    limit: int = 10,
+) -> str:
+    """
+    Retrieve news articles for a ticker with per-article sentiment and reasoning.
+    publisher_tier: 1=wire, 2=established, 3=opinion (filter is <=tier).
+    """
+    filters = [f"primary_ticker = '{ticker}'"]
+
+    if start:
+        filters.append(f"published_at >= '{start}'")
+    if end:
+        filters.append(f"published_at <= '{end}T23:59:59Z'")
+    if sentiment:
+        filters.append(f"sentiment = '{sentiment}'")
+    if publisher_tier:
+        filters.append(f"publisher_tier <= {publisher_tier}")
+
+    where = " AND ".join(filters)
+    sql = f"""
+        SELECT headline, description, publisher, publisher_tier,
+               sentiment, sentiment_reasoning, published_at,
+               article_url, keywords
+        FROM news
+        WHERE {where}
+        ORDER BY published_at DESC
+        LIMIT {limit}
+    """
+
+    try:
+        df = query(sql, DB["news"])
+    except Exception as e:
+        return f"Error querying news: {e}"
+
+    if df.empty:
+        return (
+            f"No news found for {ticker}"
+            + (f" from {start}" if start else "")
+            + (f" to {end}" if end else "")
+            + (f" with sentiment={sentiment}" if sentiment else "")
+            + ". News pipeline may not have run yet."
+        )
+
+    results = []
+    for _, row in df.iterrows():
+        tier_label = {1: "Tier-1 (Wire)", 2: "Tier-2", 3: "Tier-3 (Opinion)"}.get(
+            int(row.get("publisher_tier", 3)), "Unknown"
+        )
+        results.append(
+            f"[{row['sentiment'].upper()}] {row['headline']}\n"
+            f"Publisher: {row['publisher']} ({tier_label}) | "
+            f"Date: {row['published_at'][:10]}\n"
+            f"Summary: {row['description']}\n"
+            f"Sentiment reasoning: {row['sentiment_reasoning']}\n"
+            f"URL: {row['article_url']}\n"
+            f"{'─' * 60}"
+        )
+
+    return (
+        f"News for {ticker} ({len(df)} articles):\n\n"
+        + "\n\n".join(results)
+    )
+
+
+def get_news_summary(
+    ticker: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    publisher_tier: Optional[int] = None,
+) -> str:
+    """
+    Aggregated sentiment summary for a ticker: counts by sentiment, top publishers.
+    """
+    filters = [f"primary_ticker = '{ticker}'"]
+
+    if start:
+        filters.append(f"published_at >= '{start}'")
+    if end:
+        filters.append(f"published_at <= '{end}T23:59:59Z'")
+    if publisher_tier:
+        filters.append(f"publisher_tier <= {publisher_tier}")
+
+    where = " AND ".join(filters)
+
+    sql_counts = f"""
+        SELECT sentiment, COUNT(*) as cnt
+        FROM news
+        WHERE {where}
+        GROUP BY sentiment
+        ORDER BY cnt DESC
+    """
+    sql_publishers = f"""
+        SELECT publisher, COUNT(*) as cnt
+        FROM news
+        WHERE {where}
+        GROUP BY publisher
+        ORDER BY cnt DESC
+        LIMIT 5
+    """
+
+    try:
+        df_counts     = query(sql_counts, DB["news"])
+        df_publishers = query(sql_publishers, DB["news"])
+    except Exception as e:
+        return f"Error querying news summary: {e}"
+
+    if df_counts.empty:
+        return f"No news found for {ticker}. News pipeline may not have run yet."
+
+    total = df_counts["cnt"].astype(int).sum()
+    sentiment_breakdown = " | ".join(
+        f"{row['sentiment']}: {row['cnt']}"
+        for _, row in df_counts.iterrows()
+    )
+    top_publishers = ", ".join(
+        f"{row['publisher']} ({row['cnt']})"
+        for _, row in df_publishers.iterrows()
+    )
+
+    period = ""
+    if start or end:
+        period = f" ({start or 'start'} to {end or 'today'})"
+
+    return (
+        f"News summary for {ticker}{period}:\n"
+        f"Total articles: {total}\n"
+        f"Sentiment: {sentiment_breakdown}\n"
+        f"Top publishers: {top_publishers}"
+    )

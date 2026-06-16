@@ -53,6 +53,8 @@ FILINGS_TOOLS = [t for t in TOOLS if t["name"] in {
     "get_documents",
     "get_prose",               # targeted section retrieval from 10-K/10-Q
     "semantic_search",
+    "get_news",                # Polygon news articles with per-article sentiment
+    "get_news_summary",        # aggregated sentiment overview for a ticker
     "get_prices",              # for context — price at time of filing
     "get_macro_snapshot",      # for context — macro at time of filing
 }]

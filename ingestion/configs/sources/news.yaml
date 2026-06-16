@@ -1,0 +1,65 @@
+# ingestion/configs/sources/news.yaml
+# Polygon/Massive news ingestion config
+
+default_start_date:
+  dev:  "2026-03-15"   # 90-day backfill from first run
+  prod: "2024-01-01"
+
+frequency: weekly      # runs every Monday
+
+backfill_days:
+  dev:  90
+  prod: 90             # initial backfill only; incremental after
+
+# Tickers to fetch news for
+# 7 dev companies + 4 ETF proxies for macro asset class coverage
+tickers:
+  # Equities
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - JPM
+  - BAC
+  - XOM
+  # ETF proxies — for commodity/bond/market-level news
+  - GLD    # Gold
+  - USO    # Oil
+  - TLT    # 20yr Treasury bonds / interest rate news
+  - SPY    # Broad market / S&P 500
+
+# Publisher tier mapping (used in ETL)
+# 1 = wire services (Reuters, AP, Bloomberg)
+# 2 = established financial media (MarketWatch, Benzinga, CNBC)
+# 3 = opinion / retail-focused (Seeking Alpha, Motley Fool)
+publisher_tiers:
+  tier_1:
+    - "Reuters"
+    - "Associated Press"
+    - "Bloomberg"
+    - "Financial Times"
+    - "Wall Street Journal"
+    - "Dow Jones"
+  tier_2:
+    - "MarketWatch"
+    - "Benzinga"
+    - "Barron's"
+    - "CNBC"
+    - "Yahoo Finance"
+    - "Zacks"
+    - "Morningstar"
+    - "TheStreet"
+  tier_3:
+    - "Seeking Alpha"
+    - "The Motley Fool"
+    - "GuruFocus"
+
+# API config
+api:
+  base_url: "https://api.polygon.io"
+  news_endpoint: "/v2/reference/news"
+  rate_limit_sleep_seconds: 12   # 5 req/min on free tier
+  max_results_per_call: 1000
+  secret_name: "trade-platform/{env}/polygon-api-key"
+
+schedule: "cron(0 6 ? * MON *)"  # weekly Monday 6 AM UTC

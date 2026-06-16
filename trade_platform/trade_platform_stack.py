@@ -907,3 +907,175 @@ class TradePlatformStack(Stack):
                 f"— fires conditional ETL chain"
             ),
         )
+
+        # ── Polygon News CDK additions ────────────────────────────────────────
+
+        polygon_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "PolygonApiKey",
+            f"trade-platform/{env_name}/polygon-api-key",
+        )
+        polygon_secret.grant_read(job_role)
+
+        news_raw_bucket = s3.Bucket(
+            self, "NewsRawBucket",
+            bucket_name=f"{env_name}-trade-news-raw-{Aws.ACCOUNT_ID}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        news_raw_bucket.grant_read_write(job_role)
+        news_raw_bucket.grant_read(glue_role)
+
+        news_processed_bucket = s3.Bucket(
+            self, "NewsProcessedBucket",
+            bucket_name=f"{env_name}-trade-news-processed-{Aws.ACCOUNT_ID}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        news_processed_bucket.grant_read_write(job_role)
+        news_processed_bucket.grant_read(glue_role)
+
+        news_db = glue.CfnDatabase(
+            self, "NewsGlueDb",
+            catalog_id=self.account,
+            database_input=glue.CfnDatabase.DatabaseInputProperty(
+                name=f"{env_name}_trade_news_processed",
+                description=f"[{env_name}] Polygon news articles with sentiment",
+            ),
+        )
+
+        news_crawler = glue.CfnCrawler(
+            self, "NewsCrawler",
+            name=f"{env_name}-trade-news-processed-crawler",
+            role=glue_role.role_arn,
+            database_name=f"{env_name}_trade_news_processed",
+            targets=glue.CfnCrawler.TargetsProperty(
+                s3_targets=[
+                    glue.CfnCrawler.S3TargetProperty(
+                        path=f"s3://{env_name}-trade-news-processed-{Aws.ACCOUNT_ID}/news/",
+                    )
+                ]
+            ),
+            description=f"[{env_name}] Crawler for Polygon news articles",
+            schedule=glue.CfnCrawler.ScheduleProperty(
+                schedule_expression="cron(0 3 * * ? *)",
+            ),
+            schema_change_policy=glue.CfnCrawler.SchemaChangePolicyProperty(
+                update_behavior="LOG",
+                delete_behavior="LOG",
+            ),
+            recrawl_policy=glue.CfnCrawler.RecrawlPolicyProperty(
+                recrawl_behavior="CRAWL_EVERYTHING",
+            ),
+        )
+        news_crawler.add_dependency(news_db)
+
+        ingest_news_asset = s3_assets.Asset(
+            self, "NewsScriptAsset",
+            path="ingestion/scripts/ingest_news.py",
+        )
+        ingest_news_asset.grant_read(job_role)
+
+        etl_news_asset = s3_assets.Asset(
+            self, "NewsEtlScriptAsset",
+            path="ingestion/etl/etl_news.py",
+        )
+        etl_news_asset.grant_read(job_role)
+
+        news_ingest_job = glue.CfnJob(
+            self, "NewsIngestionJob",
+            name=f"{env_name}-trade-news-ingestion",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{ingest_news_asset.s3_bucket_name}"
+                    f"/{ingest_news_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_BASE,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=30,
+            description=f"[{env_name}] Polygon/Massive news ingestion — weekly",
+        )
+
+        news_etl_job = glue.CfnJob(
+            self, "NewsEtlJob",
+            name=f"{env_name}-trade-news-etl",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{etl_news_asset.s3_bucket_name}"
+                    f"/{etl_news_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_BASE,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=30,
+            description=f"[{env_name}] Polygon news raw JSON → Parquet ETL",
+        )
+
+        glue.CfnTrigger(
+            self, "NewsEtlTrigger",
+            name=f"{env_name}-trade-news-etl-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(job_name=news_etl_job.ref)],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="AND",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=news_ingest_job.ref,
+                        state="SUCCEEDED",
+                    )
+                ],
+            ),
+            description=f"[{env_name}] Fire etl_news after ingest_news succeeds",
+        )
+
+        glue.CfnTrigger(
+            self, "NewsScheduledTrigger",
+            name=f"{env_name}-trade-news-scheduled-trigger",
+            type="SCHEDULED",
+            schedule="cron(0 6 ? * MON *)",
+            actions=[glue.CfnTrigger.ActionProperty(job_name=news_ingest_job.ref)],
+            start_on_creation=False,
+            description=f"[{env_name}] Weekly Monday news ingestion",
+        )
+
+        glue.CfnTrigger(
+            self, "NewsManualTrigger",
+            name=f"{env_name}-trade-news-manual-trigger",
+            type="ON_DEMAND",
+            actions=[glue.CfnTrigger.ActionProperty(
+                job_name=news_ingest_job.ref
+            )],
+            description=f"[{env_name}] Manual entry point for news ingestion",
+        )
