@@ -41,6 +41,7 @@ DB = {
     "sec":       f"{ENV}_trade_sec_processed",
     "sec_prose": f"{ENV}_trade_sec_prose_processed",
     "news":      f"{ENV}_trade_news_processed",
+    "insiders":  f"{ENV}_trade_insiders_processed",
 }
 
 # ── Vector search ──────────────────────────────────────────────────────────
@@ -1131,3 +1132,154 @@ def get_news_summary(
         f"Sentiment: {sentiment_breakdown}\n"
         f"Top publishers: {top_publishers}"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INSIDER TRADES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_insider_trades(
+    ticker: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    limit: int = 20,
+) -> str:
+    """
+    Retrieve SEC Form 4 insider trades for a ticker.
+    transaction_type: P=purchase, S=sale, A=award, D=disposition, F=tax withholding.
+    """
+    filters = [f"ticker = '{ticker}'"]
+
+    if start:
+        filters.append(f"transaction_date >= '{start}'")
+    if end:
+        filters.append(f"transaction_date <= '{end}'")
+    if transaction_type:
+        filters.append(f"transaction_type = '{transaction_type}'")
+
+    where = " AND ".join(filters)
+    sql = f"""
+        SELECT filer_name, filer_role, transaction_date,
+               transaction_type, shares, price_per_share,
+               value_usd, ownership_type, shares_owned_after
+        FROM insider_trades
+        WHERE {where}
+        ORDER BY transaction_date DESC
+        LIMIT {limit}
+    """
+
+    try:
+        df = query(sql, DB["insiders"])
+    except Exception as e:
+        return f"Error querying insider trades: {e}"
+
+    if df.empty:
+        return (
+            f"No insider trades found for {ticker}"
+            + (f" from {start}" if start else "")
+            + (f" to {end}" if end else "")
+            + ". Insider trades pipeline may not have run yet."
+        )
+
+    type_labels = {
+        "P": "Purchase", "S": "Sale", "A": "Award",
+        "D": "Disposition", "F": "Tax withholding",
+        "M": "Option exercise", "G": "Gift",
+    }
+
+    results = []
+    for _, row in df.iterrows():
+        txn_label = type_labels.get(
+            str(row["transaction_type"]), str(row["transaction_type"])
+        )
+        value = float(row["value_usd"] or 0)
+        value_str = f"${value:,.0f}" if value > 0 else "N/A"
+        results.append(
+            f"[{txn_label}] {row['filer_name']} ({row['filer_role']})\n"
+            f"Date: {row['transaction_date']} | "
+            f"Shares: {float(row['shares'] or 0):,.0f} @ "
+            f"${float(row['price_per_share'] or 0):.2f} = {value_str}\n"
+            f"Ownership: {'Direct' if row['ownership_type'] == 'D' else 'Indirect'} | "
+            f"Shares after: {float(row['shares_owned_after'] or 0):,.0f}\n"
+            f"{'─' * 60}"
+        )
+
+    return (
+        f"Insider trades for {ticker} ({len(df)} transactions):\n\n"
+        + "\n\n".join(results)
+    )
+
+
+def get_insider_summary(
+    ticker: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> str:
+    """
+    Aggregated insider trading signal for a ticker — net buying vs selling.
+    """
+    filters = [f"ticker = '{ticker}'"]
+    if start:
+        filters.append(f"transaction_date >= '{start}'")
+    if end:
+        filters.append(f"transaction_date <= '{end}'")
+
+    where = " AND ".join(filters)
+    sql = f"""
+        SELECT
+            transaction_type,
+            COUNT(*) as transaction_count,
+            SUM(shares) as total_shares,
+            SUM(value_usd) as total_value_usd,
+            COUNT(DISTINCT filer_name) as unique_insiders
+        FROM insider_trades
+        WHERE {where}
+        GROUP BY transaction_type
+        ORDER BY total_value_usd DESC
+    """
+
+    try:
+        df = query(sql, DB["insiders"])
+    except Exception as e:
+        return f"Error querying insider summary: {e}"
+
+    if df.empty:
+        return f"No insider trades found for {ticker}. Pipeline may not have run yet."
+
+    type_labels = {
+        "P": "Purchases", "S": "Sales", "A": "Awards",
+        "D": "Dispositions", "F": "Tax withholding",
+    }
+
+    lines = [f"Insider trading summary for {ticker}:"]
+    total_buy_value  = 0.0
+    total_sell_value = 0.0
+
+    for _, row in df.iterrows():
+        txn_type = str(row["transaction_type"])
+        label    = type_labels.get(txn_type, txn_type)
+        value    = float(row["total_value_usd"] or 0)
+        shares   = float(row["total_shares"] or 0)
+        count    = int(row["transaction_count"])
+        insiders = int(row["unique_insiders"])
+
+        lines.append(
+            f"  {label}: {count} transactions by {insiders} insiders | "
+            f"{shares:,.0f} shares | ${value:,.0f}"
+        )
+
+        if txn_type == "P":
+            total_buy_value  += value
+        elif txn_type == "S":
+            total_sell_value += value
+
+    if total_buy_value > 0 or total_sell_value > 0:
+        net    = total_buy_value - total_sell_value
+        signal = "NET BUYING" if net > 0 else "NET SELLING"
+        lines.append(
+            f"\n  {signal}: ${abs(net):,.0f} net "
+            f"({'bullish' if net > 0 else 'bearish'} insider signal)"
+        )
+
+    return "\n".join(lines)

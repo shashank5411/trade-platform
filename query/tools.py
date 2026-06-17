@@ -605,6 +605,67 @@ TOOLS = [
         },
     },
 
+    # ── INSIDER TRADES ─────────────────────────────────────────────────────
+
+    {
+        "name": "get_insider_trades",
+        "description": (
+            "Retrieve SEC Form 4 insider trades — purchases and sales by company "
+            "officers, directors, and 10%+ owners. Use for: 'were insiders buying "
+            "or selling AAPL before earnings?', 'show me JPM insider trades this "
+            "year', 'did any executives sell stock recently?'. "
+            "Available tickers: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM. "
+            "transaction_type: P=purchase, S=sale, A=award, D=disposition. "
+            "Use get_insider_summary first for the net buying/selling signal, "
+            "then get_insider_trades for individual transactions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Company ticker e.g. AAPL, JPM"
+                },
+                "start": {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "end":   {"type": "string", "description": "End date YYYY-MM-DD"},
+                "transaction_type": {
+                    "type": "string",
+                    "enum": ["P", "S", "A", "D", "F"],
+                    "description": "P=purchase, S=sale, A=award, D=disposition, F=tax withholding"
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "description": "Max transactions (default 20)"
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+
+    {
+        "name": "get_insider_summary",
+        "description": (
+            "Get aggregated insider trading signal for a ticker — net buying vs "
+            "selling, total value, number of insiders active. Use FIRST before "
+            "get_insider_trades to understand overall insider sentiment. "
+            "High net buying = bullish insider signal. "
+            "High net selling = bearish insider signal (but may include tax/option "
+            "transactions — check transaction types). "
+            "Use for: 'are insiders bullish on AAPL?', 'net insider activity for "
+            "JPM this quarter', 'insider sentiment before earnings'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Company ticker"},
+                "start":  {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "end":    {"type": "string", "description": "End date YYYY-MM-DD"},
+            },
+            "required": ["ticker"],
+        },
+    },
+
 
 {
     "name": "get_fed_communications",
@@ -676,4 +737,6 @@ def get_registry():
         "get_fed_communications":  api.get_fed_communications,
         "get_news":                api.get_news,
         "get_news_summary":        api.get_news_summary,
+        "get_insider_trades":      api.get_insider_trades,
+        "get_insider_summary":     api.get_insider_summary,
     }

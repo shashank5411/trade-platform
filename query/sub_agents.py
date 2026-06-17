@@ -55,6 +55,8 @@ FILINGS_TOOLS = [t for t in TOOLS if t["name"] in {
     "semantic_search",
     "get_news",                # Polygon news articles with per-article sentiment
     "get_news_summary",        # aggregated sentiment overview for a ticker
+    "get_insider_trades",      # SEC Form 4 individual insider transactions
+    "get_insider_summary",     # net buying/selling signal for a ticker
     "get_prices",              # for context — price at time of filing
     "get_macro_snapshot",      # for context — macro at time of filing
 }]

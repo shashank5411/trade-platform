@@ -1079,3 +1079,173 @@ class TradePlatformStack(Stack):
             )],
             description=f"[{env_name}] Manual entry point for news ingestion",
         )
+
+        # ── SEC Form 4 Insider Trades CDK additions ───────────────────────────
+
+        insiders_raw_bucket = s3.Bucket(
+            self, "InsidersRawBucket",
+            bucket_name=f"{env_name}-trade-insiders-raw-{Aws.ACCOUNT_ID}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        insiders_raw_bucket.grant_read_write(job_role)
+        insiders_raw_bucket.grant_read(glue_role)
+
+        insiders_processed_bucket = s3.Bucket(
+            self, "InsidersProcessedBucket",
+            bucket_name=f"{env_name}-trade-insiders-processed-{Aws.ACCOUNT_ID}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        insiders_processed_bucket.grant_read_write(job_role)
+        insiders_processed_bucket.grant_read(glue_role)
+
+        insiders_db = glue.CfnDatabase(
+            self, "InsidersGlueDb",
+            catalog_id=self.account,
+            database_input=glue.CfnDatabase.DatabaseInputProperty(
+                name=f"{env_name}_trade_insiders_processed",
+                description=f"[{env_name}] SEC Form 4 insider trades",
+            ),
+        )
+
+        insiders_crawler = glue.CfnCrawler(
+            self, "InsidersCrawler",
+            name=f"{env_name}-trade-insiders-processed-crawler",
+            role=glue_role.role_arn,
+            database_name=f"{env_name}_trade_insiders_processed",
+            targets=glue.CfnCrawler.TargetsProperty(
+                s3_targets=[
+                    glue.CfnCrawler.S3TargetProperty(
+                        path=f"s3://{env_name}-trade-insiders-processed-{Aws.ACCOUNT_ID}/insider_trades/",
+                    )
+                ]
+            ),
+            description=f"[{env_name}] Crawler for insider trades",
+            schedule=glue.CfnCrawler.ScheduleProperty(
+                schedule_expression="cron(0 3 * * ? *)",
+            ),
+            schema_change_policy=glue.CfnCrawler.SchemaChangePolicyProperty(
+                update_behavior="LOG",
+                delete_behavior="LOG",
+            ),
+            recrawl_policy=glue.CfnCrawler.RecrawlPolicyProperty(
+                recrawl_behavior="CRAWL_EVERYTHING",
+            ),
+        )
+        insiders_crawler.add_dependency(insiders_db)
+
+        ingest_insiders_asset = s3_assets.Asset(
+            self, "InsidersScriptAsset",
+            path="ingestion/scripts/ingest_insiders.py",
+        )
+        ingest_insiders_asset.grant_read(job_role)
+
+        etl_insiders_asset = s3_assets.Asset(
+            self, "InsidersEtlScriptAsset",
+            path="ingestion/etl/etl_insiders.py",
+        )
+        etl_insiders_asset.grant_read(job_role)
+
+        insiders_ingest_job = glue.CfnJob(
+            self, "InsidersIngestionJob",
+            name=f"{env_name}-trade-insiders-ingestion",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{ingest_insiders_asset.s3_bucket_name}"
+                    f"/{ingest_insiders_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_BASE,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=60,
+            description=f"[{env_name}] SEC Form 4 insider trades ingestion",
+        )
+
+        insiders_etl_job = glue.CfnJob(
+            self, "InsidersEtlJob",
+            name=f"{env_name}-trade-insiders-etl",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{etl_insiders_asset.s3_bucket_name}"
+                    f"/{etl_insiders_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_BASE,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=30,
+            description=f"[{env_name}] Insider trades raw → Parquet ETL",
+        )
+
+        glue.CfnTrigger(
+            self, "InsidersEtlTrigger",
+            name=f"{env_name}-trade-insiders-etl-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(
+                job_name=insiders_etl_job.ref
+            )],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="AND",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=insiders_ingest_job.ref,
+                        state="SUCCEEDED",
+                    )
+                ],
+            ),
+            description=f"[{env_name}] Fire etl_insiders after ingest_insiders succeeds",
+        )
+
+        glue.CfnTrigger(
+            self, "InsidersScheduledTrigger",
+            name=f"{env_name}-trade-insiders-scheduled-trigger",
+            type="SCHEDULED",
+            schedule="cron(0 8 1 1,4,7,10 ? *)",
+            actions=[glue.CfnTrigger.ActionProperty(
+                job_name=insiders_ingest_job.ref
+            )],
+            start_on_creation=False,
+            description=f"[{env_name}] Quarterly insider trades ingestion",
+        )
+
+        glue.CfnTrigger(
+            self, "InsidersManualTrigger",
+            name=f"{env_name}-trade-insiders-manual-trigger",
+            type="ON_DEMAND",
+            actions=[glue.CfnTrigger.ActionProperty(
+                job_name=insiders_ingest_job.ref
+            )],
+            description=f"[{env_name}] Manual entry point for insider trades ingestion",
+        )
