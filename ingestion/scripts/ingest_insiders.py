@@ -47,7 +47,8 @@ HEADERS = {
     "User-Agent": "trade-platform/1.0 research@example.com",
     "Accept-Encoding": "gzip, deflate",
 }
-BASE_URL     = "https://data.sec.gov"
+BASE_URL     = "https://data.sec.gov"   # submissions API
+ARCHIVES_URL = "https://www.sec.gov"    # filing Archives (data.sec.gov returns 404 here)
 DELAY_SEC    = 0.15   # 150ms between EDGAR requests — safely under 10 req/s
 
 # Dev companies: ticker → CIK mapping
@@ -194,51 +195,36 @@ def get_form4_filings(cik: str) -> list:
 # ── Fetch and parse Form 4 XML ────────────────────────────────────────────────
 def fetch_form4_xml(cik: str, accession: str) -> str:
     """
-    Fetch Form 4 XML by first getting the filing index,
-    then finding the actual XML filename.
+    Fetch Form 4 XML by parsing the filing index HTML to discover the actual XML filename.
+    EDGAR XML filenames vary per filer (form4.xml, wf-form4.xml, etc.).
     """
     acc_dashed = f"{accession[:10]}-{accession[10:12]}-{accession[12:]}"
     cik_int    = int(cik)
+    base_path  = f"{ARCHIVES_URL}/Archives/edgar/data/{cik_int}/{accession}"
 
-    # Always fetch index first — XML filename varies per filer
-    index_url  = (
-        f"{BASE_URL}/Archives/edgar/data/{cik_int}"
-        f"/{accession}/{acc_dashed}-index.json"
-    )
+    # Step 1: Parse index HTML to find the actual XML filename
     time.sleep(DELAY_SEC)
-    index_text = fetch_url(index_url)
+    index_html = fetch_url(f"{base_path}/{acc_dashed}-index.html")
 
-    if index_text:
-        try:
-            index_data = json.loads(index_text)
-            for doc in index_data.get("documents", []):
-                if doc.get("type") == "4" and doc.get("document", "").endswith(".xml"):
-                    xml_url  = (
-                        f"{BASE_URL}/Archives/edgar/data/{cik_int}"
-                        f"/{accession}/{doc['document']}"
-                    )
-                    time.sleep(DELAY_SEC)
-                    xml_text = fetch_url(xml_url)
-                    if xml_text and "<ownershipDocument" in xml_text:
-                        return xml_text
-        except (json.JSONDecodeError, KeyError):
-            pass
+    if index_html:
+        for link in re.findall(r'href="([^"]+\.xml)"', index_html):
+            if link.startswith("http"):
+                xml_url = link
+            elif link.startswith("/"):
+                xml_url = f"{ARCHIVES_URL}{link}"
+            else:
+                xml_url = f"{base_path}/{link}"
+            time.sleep(DELAY_SEC)
+            xml_text = fetch_url(xml_url)
+            if xml_text and "<ownershipDocument" in xml_text:
+                return xml_text
 
-    # Fallback — try common XML filenames
-    for filename in [
-        f"{acc_dashed}.xml",
-        "wf-form4.xml",
-        "form4.xml",
-        "xslF345X05/wf-form4.xml",
-    ]:
-        url = (
-            f"{BASE_URL}/Archives/edgar/data/{cik_int}"
-            f"/{accession}/{filename}"
-        )
+    # Step 2: Fallback — try common filenames directly
+    for filename in ["form4.xml", "wf-form4.xml", f"{acc_dashed}.xml"]:
         time.sleep(DELAY_SEC)
-        text = fetch_url(url)
-        if text and "<ownershipDocument" in text:
-            return text
+        xml_text = fetch_url(f"{base_path}/{filename}")
+        if xml_text and "<ownershipDocument" in xml_text:
+            return xml_text
 
     return ""
 

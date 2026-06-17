@@ -156,6 +156,30 @@ SOURCE_CONFIG = {
         "tracker":       None,
         "watermark_source": None,  # uses S3 tracker/ingested_ids.json
     },
+    "insiders": {
+        "ingest_job":    f"{ENV}-trade-insiders-ingestion",
+        "etl_job":       f"{ENV}-trade-insiders-etl",
+        "etl_trigger":   f"{ENV}-trade-insiders-etl-trigger",
+        "raw_bucket":    f"{ENV}-trade-insiders-raw-{ACCOUNT_ID}",
+        "proc_bucket":   f"{ENV}-trade-insiders-processed-{ACCOUNT_ID}",
+        "proc_prefix":   "insider_trades/",
+        "crawler":       f"{ENV}-trade-insiders-processed-crawler",
+        "athena_db":     f"{ENV}_trade_insiders_processed",
+        "athena_table":  "insider_trades",
+        "athena_query":  (
+            "SELECT ticker, transaction_type,"
+            " COUNT(*) as cnt,"
+            " SUM(value_usd) as total_value,"
+            " COUNT(DISTINCT filer_name) as unique_insiders"
+            " FROM insider_trades"
+            " GROUP BY ticker, transaction_type"
+            " ORDER BY total_value DESC"
+            " LIMIT 20"
+        ),
+        "tracker":          None,
+        "watermark_source": None,   # uses per-ticker S3 tracker files
+        "ticker_tracker":   True,   # tracker/{ticker}.json, one per ticker
+    },
 }
 
 
@@ -249,6 +273,27 @@ def get_fedspeak_tracker(bucket: str) -> dict:
         return {"count": count, "found": True}
     except s3.exceptions.NoSuchKey:
         return {"found": False, "error": "tracker/ingested_ids.json not found"}
+    except Exception as e:
+        return {"found": False, "error": str(e)}
+
+
+def get_insiders_tracker(bucket: str) -> dict:
+    """Read all per-ticker tracker/{ticker}.json files, sum fetched_accessions counts."""
+    try:
+        paginator = s3.get_paginator("list_objects_v2")
+        total_accessions = 0
+        tickers_found    = 0
+        for page in paginator.paginate(Bucket=bucket, Prefix="tracker/"):
+            for obj in page.get("Contents", []):
+                if not obj["Key"].endswith(".json"):
+                    continue
+                body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
+                data = json.loads(body)
+                total_accessions += len(data.get("fetched_accessions", []))
+                tickers_found    += 1
+        if tickers_found == 0:
+            return {"found": False, "error": "No tracker files found under tracker/"}
+        return {"found": True, "total": total_accessions, "tickers": tickers_found}
     except Exception as e:
         return {"found": False, "error": str(e)}
 
@@ -497,12 +542,21 @@ def verify(source: str, run_crawler_flag: bool = False):
             print(f"   ❌ {t['error']}")
 
     elif cfg.get("watermark_source") is None and not cfg.get("tracker"):
-        print("\n5. S3 INGESTED-IDS TRACKER")
-        t = get_fedspeak_tracker(cfg["raw_bucket"])
-        if t["found"]:
-            print(f"   ✅ {t['count']} ingested IDs in tracker/ingested_ids.json")
+        if cfg.get("ticker_tracker"):
+            print("\n5. S3 PER-TICKER TRACKER")
+            t = get_insiders_tracker(cfg["raw_bucket"])
+            if t["found"]:
+                print(f"   ✅ {t['total']} total accessions across "
+                      f"{t['tickers']} ticker tracker file(s)")
+            else:
+                print(f"   ❌ {t['error']}")
         else:
-            print(f"   ❌ {t['error']}")
+            print("\n5. S3 INGESTED-IDS TRACKER")
+            t = get_fedspeak_tracker(cfg["raw_bucket"])
+            if t["found"]:
+                print(f"   ✅ {t['count']} ingested IDs in tracker/ingested_ids.json")
+            else:
+                print(f"   ❌ {t['error']}")
 
     # ── 6. Crawler ────────────────────────────────────────────────────────
     print("\n6. GLUE CRAWLER")

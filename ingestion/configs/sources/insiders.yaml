@@ -2,7 +2,7 @@
 # SEC Form 4 insider trades ingestion config
 
 default_start_date:
-  dev:  "2020-01-01"
+  dev:  "2023-01-01"
   prod: "2000-01-01"
 
 frequency: quarterly   # Form 4 filings are continuous but we batch quarterly
