@@ -180,6 +180,25 @@ SOURCE_CONFIG = {
         "watermark_source": None,   # uses per-ticker S3 tracker files
         "ticker_tracker":   True,   # tracker/{ticker}.json, one per ticker
     },
+    "companies": {
+        "ingest_job":    f"{ENV}-trade-yfinance-ingestion",
+        "etl_job":       f"{ENV}-trade-companies-etl",
+        "etl_trigger":   f"{ENV}-trade-companies-etl-trigger",
+        "raw_bucket":    None,      # derived source — no separate raw bucket
+        "proc_bucket":   f"{ENV}-trade-yfinance-processed-{ACCOUNT_ID}",
+        "proc_prefix":   "companies/",
+        "crawler":       f"{ENV}-trade-yfinance-processed-crawler",
+        "athena_db":     f"{ENV}_trade_yfinance_processed",
+        "athena_table":  "companies",
+        "athena_query":  (
+            "SELECT ticker, company_name, sector, market_cap "
+            "FROM companies "
+            "ORDER BY market_cap DESC NULLS LAST "
+            "LIMIT 10"
+        ),
+        "tracker":          None,
+        "watermark_source": None,   # full-refresh — no watermark
+    },
 }
 
 
@@ -417,16 +436,19 @@ def reset(source: str, cfg: dict):
     print(f"{'='*60}\n")
 
     # Clear raw bucket
-    print(f"Clearing raw bucket: {cfg['raw_bucket']}")
-    # For SEC, preserve the latest/ prefix (needed by ETL) but clear year= and tracker/
-    if source == "sec":
-        n = delete_s3_prefix(cfg["raw_bucket"], "year=")
-        print(f"  Deleted {n} files from year= prefix")
-        n = delete_sec_trackers(cfg["raw_bucket"])
-        print(f"  Deleted {n} tracker files")
+    if cfg.get("raw_bucket"):
+        print(f"Clearing raw bucket: {cfg['raw_bucket']}")
+        # For SEC, preserve the latest/ prefix (needed by ETL) but clear year= and tracker/
+        if source == "sec":
+            n = delete_s3_prefix(cfg["raw_bucket"], "year=")
+            print(f"  Deleted {n} files from year= prefix")
+            n = delete_sec_trackers(cfg["raw_bucket"])
+            print(f"  Deleted {n} tracker files")
+        else:
+            n = delete_s3_prefix(cfg["raw_bucket"])
+            print(f"  Deleted {n} files")
     else:
-        n = delete_s3_prefix(cfg["raw_bucket"])
-        print(f"  Deleted {n} files")
+        print("   RAW BUCKET: N/A (derived source — no raw bucket)")
 
     # Clear processed bucket
     print(f"Clearing processed bucket: {cfg['proc_bucket']}")
@@ -491,15 +513,18 @@ def verify(source: str, run_crawler_flag: bool = False):
 
     # ── 3. S3 Raw — recent files ──────────────────────────────────────────
     print("\n3. S3 RAW — files written in last 24h")
-    raw_files = get_recent_s3_files(cfg["raw_bucket"], "", hours=24)
-    if raw_files and "error" not in raw_files[0]:
-        print(f"   {check_mark(len(raw_files) > 0)} {len(raw_files)} new files")
-        for f in raw_files[:5]:
-            print(f"      {f['modified']}  {f['size_kb']:>8} KB  {f['key']}")
-        if len(raw_files) > 5:
-            print(f"      ... and {len(raw_files) - 5} more")
+    if cfg.get("raw_bucket"):
+        raw_files = get_recent_s3_files(cfg["raw_bucket"], "", hours=24)
+        if raw_files and "error" not in raw_files[0]:
+            print(f"   {check_mark(len(raw_files) > 0)} {len(raw_files)} new files")
+            for f in raw_files[:5]:
+                print(f"      {f['modified']}  {f['size_kb']:>8} KB  {f['key']}")
+            if len(raw_files) > 5:
+                print(f"      ... and {len(raw_files) - 5} more")
+        else:
+            print(f"   ❌ Error or no recent files: {raw_files}")
     else:
-        print(f"   ❌ Error or no recent files: {raw_files}")
+        print("   RAW BUCKET: N/A (derived source — no raw bucket)")
 
     # ── 4. S3 Processed — recent files ───────────────────────────────────
     print("\n4. S3 PROCESSED — files written in last 24h")
@@ -542,21 +567,24 @@ def verify(source: str, run_crawler_flag: bool = False):
             print(f"   ❌ {t['error']}")
 
     elif cfg.get("watermark_source") is None and not cfg.get("tracker"):
-        if cfg.get("ticker_tracker"):
-            print("\n5. S3 PER-TICKER TRACKER")
-            t = get_insiders_tracker(cfg["raw_bucket"])
-            if t["found"]:
-                print(f"   ✅ {t['total']} total accessions across "
-                      f"{t['tickers']} ticker tracker file(s)")
+        if cfg.get("raw_bucket"):
+            if cfg.get("ticker_tracker"):
+                print("\n5. S3 PER-TICKER TRACKER")
+                t = get_insiders_tracker(cfg["raw_bucket"])
+                if t["found"]:
+                    print(f"   ✅ {t['total']} total accessions across "
+                          f"{t['tickers']} ticker tracker file(s)")
+                else:
+                    print(f"   ❌ {t['error']}")
             else:
-                print(f"   ❌ {t['error']}")
+                print("\n5. S3 INGESTED-IDS TRACKER")
+                t = get_fedspeak_tracker(cfg["raw_bucket"])
+                if t["found"]:
+                    print(f"   ✅ {t['count']} ingested IDs in tracker/ingested_ids.json")
+                else:
+                    print(f"   ❌ {t['error']}")
         else:
-            print("\n5. S3 INGESTED-IDS TRACKER")
-            t = get_fedspeak_tracker(cfg["raw_bucket"])
-            if t["found"]:
-                print(f"   ✅ {t['count']} ingested IDs in tracker/ingested_ids.json")
-            else:
-                print(f"   ❌ {t['error']}")
+            print("\n5. WATERMARKS: N/A (full refresh source)")
 
     # ── 6. Crawler ────────────────────────────────────────────────────────
     print("\n6. GLUE CRAWLER")

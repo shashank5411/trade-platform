@@ -17,11 +17,11 @@ LAYERS = ["raw", "processed"]
 
 # Add this dict near the top of the stack, alongside SOURCES/LAYERS
 PROCESSED_PATHS = {
-    "fred":       "economic_indicators/source=FRED/",
-    "worldbank":  "economic_indicators/source=WORLDBANK/",
-    "yfinance":   "market_prices/",
-    "wikipedia":  "documents/source=WIKIPEDIA/",
-    "sec":        "documents/source=EDGAR/",
+    "fred":       "",
+    "worldbank":  "",
+    "yfinance":   "",
+    "wikipedia":  "",
+    "sec":        "",
 }
 
 RAW_PATHS = {
