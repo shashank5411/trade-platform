@@ -26,6 +26,21 @@ SYNTH_MODEL = (
 from query.config import get_client
 client = get_client()
 
+ROLE_DESCRIPTIONS = {
+    "market":    "stock prices, price performance, and market data",
+    "macro":     "economic indicators and macro data",
+    "filings":   "SEC filings, qualitative documents, and Fed communications",
+    "sentiment": "insider trades and news sentiment",
+}
+
+SYNTHESIS_SYSTEM = (
+    "Synthesize using the data that agents returned. If an agent returned "
+    "partial data or flagged missing information, incorporate what is "
+    "available and note the gap in one sentence — do not ask the user for "
+    "clarification or block the answer on missing data. The user can "
+    "follow up if needed."
+)
+
 
 async def _run_agent_async(
     agent_name: str,
@@ -108,12 +123,25 @@ async def execute(
                 for dep in dag[name].get("depends_on", [])
                 if dep in completed
             ]
-            enriched = (
-                f"{question}\n\n"
-                f"Context from prior analysis:\n"
-                + "\n\n".join(dep_answers)
-                if dep_answers else question
-            )
+            if dep_answers:
+                # Sequential agent: enrich with prior outputs
+                enriched = (
+                    f"{question}\n\n"
+                    f"Context from prior analysis:\n"
+                    + "\n\n".join(dep_answers)
+                )
+            elif len(ready) > 1:
+                # Parallel agent: inject role-scoping hint so it stays in its lane
+                role_desc = ROLE_DESCRIPTIONS.get(name, name)
+                enriched = (
+                    f"{question}\n\n"
+                    f"[Your role in this query: focus on {role_desc} only. "
+                    f"Other specialist agents are handling the remaining parts "
+                    f"in parallel. Do not ask for clarification about data "
+                    f"outside your domain — just answer your part.]"
+                )
+            else:
+                enriched = question
             tasks.append(_run_agent_async(name, enriched, history, verbose, session_id))
 
         results = await asyncio.gather(*tasks)
@@ -148,6 +176,7 @@ async def execute(
     response = client.messages.create(
         model=SYNTH_MODEL,
         max_tokens=2000,
+        system=SYNTHESIS_SYSTEM,
         messages=[{"role": "user", "content": synthesis_prompt}],
     )
     return response.content[0].text

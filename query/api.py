@@ -1218,6 +1218,7 @@ def get_insider_summary(
 ) -> str:
     """
     Aggregated insider trading signal for a ticker — net buying vs selling.
+    F (tax withholding) is reported separately and excluded from the net signal.
     """
     filters = [f"ticker = '{ticker}'"]
     if start:
@@ -1248,24 +1249,37 @@ def get_insider_summary(
         return f"No insider trades found for {ticker}. Pipeline may not have run yet."
 
     type_labels = {
-        "P": "Purchases", "S": "Sales", "A": "Awards",
-        "D": "Dispositions", "F": "Tax withholding",
+        "P": "Open-market purchases (bullish — discretionary buy)",
+        "S": "Open-market sales (may be 10b5-1 pre-planned program)",
+        "F": "Tax withholding on RSU/PSU vesting (NOT a sell signal — automatic)",
+        "A": "Awards / grants",
+        "D": "Dispositions (transfer to trust/charity, not open-market)",
+        "M": "Option exercises",
+        "G": "Gifts",
+        "J": "Other acquisitions/dispositions",
+        "X": "Option exercises (in-the-money)",
     }
 
     lines = [f"Insider trading summary for {ticker}:"]
+    if start or end:
+        period = f"{start or 'start'} → {end or 'present'}"
+        lines[0] += f" ({period})"
+
     total_buy_value  = 0.0
     total_sell_value = 0.0
+    f_value          = 0.0
 
     for _, row in df.iterrows():
         txn_type = str(row["transaction_type"])
-        label    = type_labels.get(txn_type, txn_type)
+        label    = type_labels.get(txn_type, f"Type {txn_type}")
         value    = float(row["total_value_usd"] or 0)
         shares   = float(row["total_shares"] or 0)
         count    = int(row["transaction_count"])
         insiders = int(row["unique_insiders"])
 
         lines.append(
-            f"  {label}: {count} transactions by {insiders} insiders | "
+            f"  [{txn_type}] {label}\n"
+            f"      {count} transactions by {insiders} insiders | "
             f"{shares:,.0f} shares | ${value:,.0f}"
         )
 
@@ -1273,13 +1287,124 @@ def get_insider_summary(
             total_buy_value  += value
         elif txn_type == "S":
             total_sell_value += value
+        elif txn_type == "F":
+            f_value          += value
 
+    # Net signal — P vs S only; F excluded because it is automatic tax withholding
+    lines.append("")
     if total_buy_value > 0 or total_sell_value > 0:
         net    = total_buy_value - total_sell_value
         signal = "NET BUYING" if net > 0 else "NET SELLING"
         lines.append(
-            f"\n  {signal}: ${abs(net):,.0f} net "
-            f"({'bullish' if net > 0 else 'bearish'} insider signal)"
+            f"  {signal} (open-market only): ${abs(net):,.0f} net\n"
+            f"    Purchases: ${total_buy_value:,.0f} | "
+            f"Sales: ${total_sell_value:,.0f}"
+        )
+    else:
+        lines.append("  No open-market purchases or sales in this period.")
+
+    if f_value > 0:
+        lines.append(
+            f"\n  Note: ${f_value:,.0f} in type-F tax withholding transactions "
+            f"excluded from net signal above. These are automatic share "
+            f"surrenders when RSUs vest — not discretionary sell decisions."
         )
 
+    lines.append(
+        "\n  Interpretation note: Most executive open-market sales are executed "
+        "under pre-planned Rule 10b5-1 programs set up months in advance. "
+        "They do not necessarily reflect the insider's view of near-term "
+        "stock performance. Purchases are more reliably bullish signals "
+        "as they are typically discretionary."
+    )
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COMPANIES REFERENCE TABLE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_companies_in_sector(
+    sector: str,
+    industry: Optional[str] = None,
+    min_market_cap: Optional[float] = None,
+    sp500_only: bool = False,
+) -> str:
+    """
+    Return companies in a sector/industry from the reference table.
+    Used as step 1 before get_prices_multi or get_insider_summary to
+    discover which tickers to query.
+    """
+    db    = DB["yfinance"]
+    table = "companies"
+
+    filters = [f"sector = '{sector}'"]
+    if industry:
+        filters.append(f"industry = '{industry}'")
+    if min_market_cap:
+        filters.append(f"market_cap >= {min_market_cap}")
+    if sp500_only:
+        filters.append("sp500 = true")
+
+    where = " AND ".join(filters)
+    sql = f"""
+        SELECT ticker, company_name, sector, industry,
+               exchange, city, state, market_cap,
+               beta, dividend_yield, pe_ratio,
+               week52_high, week52_low,
+               avg_volume_3m, sp500
+        FROM {table}
+        WHERE {where}
+        ORDER BY market_cap DESC NULLS LAST
+    """
+
+    try:
+        df = query(sql, db)
+    except Exception as e:
+        return _athena_error_msg(e, f"fetching companies in sector '{sector}'")
+
+    if df.empty:
+        return (
+            f"No companies found in sector '{sector}'"
+            + (f" / industry '{industry}'" if industry else "")
+            + ". The companies table may not have run yet, or the sector "
+            + "name may not match exactly. Try: Technology, Energy, "
+            + "Financials, Health Care, Consumer Discretionary, Industrials, "
+            + "Communication Services, Utilities, Real Estate, Materials, "
+            + "Consumer Staples."
+        )
+
+    lines = [
+        f"Companies in {sector}"
+        + (f" / {industry}" if industry else "")
+        + f" ({len(df)} tracked):\n"
+    ]
+    for _, row in df.iterrows():
+        mcap = float(row.get("market_cap") or 0)
+        mcap_str = (
+            f"${mcap/1e12:.1f}T" if mcap >= 1e12
+            else f"${mcap/1e9:.0f}B" if mcap >= 1e9
+            else f"${mcap/1e6:.0f}M" if mcap >= 1e6
+            else "N/A"
+        )
+        beta     = row.get("beta")
+        beta_str = f"β{float(beta):.2f}" if beta else ""
+        dy       = row.get("dividend_yield")
+        dy_str   = f"yield {float(dy)*100:.1f}%" if dy else ""
+        location = ""
+        if row.get("city") and row.get("state"):
+            location = f"{row['city']}, {row['state']}"
+        elif row.get("city"):
+            location = str(row["city"])
+
+        meta = " | ".join(filter(None, [mcap_str, beta_str, dy_str, location]))
+        lines.append(
+            f"  {row['ticker']:6s} {str(row.get('company_name','')):<35s} "
+            f"{str(row.get('industry','')):<30s} {meta}"
+        )
+
+    lines.append(
+        f"\nTickers: {', '.join(df['ticker'].tolist())}"
+    )
     return "\n".join(lines)

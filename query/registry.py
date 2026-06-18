@@ -7,7 +7,7 @@ To add a new agent:
   3. That's it — planner and executor pick it up automatically
 """
 
-from query.sub_agents import market_agent, macro_agent, filings_agent
+from query.sub_agents import market_agent, macro_agent, filings_agent, sentiment_agent
 
 AGENT_REGISTRY = {
     "market": {
@@ -53,7 +53,21 @@ AGENT_REGISTRY = {
             "Uses semantic search for meaning-based retrieval across all "
             "documents. Use for: Fed communications, business strategy, "
             "risk factors, company narratives, economic concept explanations, "
-            "historical event analysis."
+            "historical event analysis. "
+            "Does NOT have news or insider trade tools — use sentiment agent for those."
+        ),
+    },
+    "sentiment": {
+        "agent":       sentiment_agent,
+        "description": (
+            "Specialist in alternative data and market sentiment signals. "
+            "Use for: insider buying/selling activity (SEC Form 4), "
+            "news sentiment and media coverage, pre-earnings alternative signals, "
+            "combined insider + news reads. "
+            "Data: Form 4 insider trades for AAPL/MSFT/GOOGL/AMZN/JPM/BAC/XOM. "
+            "News sentiment for those tickers plus GLD/USO/TLT/SPY. "
+            "NOT for: stock prices (use market), macro indicators (use macro), "
+            "SEC filings text / MD&A / risk factors (use filings)."
         ),
     },
 }

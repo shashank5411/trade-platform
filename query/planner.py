@@ -31,16 +31,19 @@ Available agents:
 {get_agent_descriptions()}
 
 Agent capability boundaries — apply these BEFORE any other rules:
-  filings: handles ALL Fed document content — what the Fed has SAID.
-    Has get_fed_communications (FOMC statements, minutes, press conference
-    transcripts, governor speeches) and semantic_search over Fed documents.
-    Use for any question about Fed communications, policy reasoning, or
-    official commentary. This is the ONLY agent with access to Fed documents.
-  macro:   handles Fed ACTIONS only — rate levels, rate changes, yield data
-    via FRED indicators. Has NO access to Fed documents, statements, minutes,
-    or speeches. Do NOT route Fed communications questions here — macro cannot
-    retrieve what the Fed said, only what rates numerically were.
-  market:  handles price and return data only. No macro or document access.
+  filings:   handles ALL Fed document content — what the Fed has SAID.
+    Has get_fed_communications and semantic_search over FOMC statements,
+    minutes, transcripts, speeches, SEC 10-K/10-Q, and Wikipedia articles.
+    This is the ONLY agent with access to Fed documents and SEC prose.
+    Does NOT have news or insider trade tools.
+  macro:     handles Fed ACTIONS only — rate levels, rate changes, yield data
+    via FRED indicators. Has NO access to Fed documents or statements.
+    Do NOT route Fed communications questions here.
+  market:    handles price and return data only. No macro or document access.
+  sentiment: handles insider trades (Form 4) and news sentiment.
+    This is the ONLY agent with get_news, get_news_summary,
+    get_insider_trades, get_insider_summary. Also has get_prices for context.
+    Does NOT have filings or Fed document tools.
 
 Content routing rules — apply FIRST, before dependency rules:
   1. Route to filings (NOT macro) when question contains any of:
@@ -50,9 +53,50 @@ Content routing rules — apply FIRST, before dependency rules:
        "what did the Fed say", "Fed policy stance", "Fed language"
   2. Route to macro when question asks for Fed rate LEVELS or CHANGES
      as numeric data (e.g. "what was the Fed funds rate in 2022?")
-  3. When a question asks BOTH what the Fed said AND rate/inflation data:
-     route filings for the communications part AND macro for the indicator
-     data — run both in parallel with empty depends_on
+  3. Route to sentiment (NOT filings) when question contains any of:
+       "insider trades", "insider buying", "insider selling", "Form 4",
+       "news sentiment", "media coverage", "analyst coverage",
+       "were insiders buying", "did executives sell", "news around",
+       "coverage of", "positive news", "negative news", "news about"
+  4. When BOTH what the Fed said AND rate/inflation data → filings + macro
+     in parallel, empty depends_on
+  5. When BOTH sentiment signal AND price reaction → sentiment + market
+     in parallel, empty depends_on
+  6. When BOTH insider/news signal AND SEC filing content → sentiment + filings
+     in parallel, empty depends_on
+
+IMPLICIT DATE RESOLUTION
+
+When a question implies recency without specifying exact dates, do NOT
+ask for clarification. Use these default windows and instruct the relevant
+agent accordingly. The agent MUST state the assumed window at the start
+of its answer.
+
+  "before earnings" / "pre-earnings"      → 90-day window ending today
+  "recently" / "lately" / "of late"       → last 30 days
+  "this month"                            → first day of current month to today
+  "this quarter"                          → first day of current quarter to today
+  "this year" / "YTD"                     → Jan 1 of current year to today
+  "before the announcement"               → last 30 days
+  "before the merger" / "before the deal" → last 90 days
+  "before the news"                       → last 30 days
+  "latest" / "most recent"                → most recent available data point,
+                                            no date range needed
+  "current" / "right now" / "today"       → as of today's date
+  "recently filed"                        → last 90 days (filings/documents)
+  no time reference at all                → last 90 days for sentiment/insider,
+                                            last 30 days for news,
+                                            last 1 year for prices,
+                                            most recent for indicators
+
+When the question combines implicit recency with a specific event
+(e.g. "before earnings", "before the Fed meeting"), prefer the event
+window over the generic default. Always pass the resolved start/end
+dates explicitly to the agent in the DAG instructions so the agent
+does not have to re-infer them.
+
+Today's date is available as context — use it to compute absolute
+dates from relative references before routing.
 
 Given a user question and optional conversation context, produce an
 optimal execution DAG (Directed Acyclic Graph) that minimizes latency
@@ -70,6 +114,7 @@ Rules:
 Dependency decision guide:
 - Market agent rarely needs other agents' output first
 - Macro agent rarely needs other agents' output first
+- Sentiment agent rarely needs other agents' output first
 - Filings agent benefits from macro context when question is about
   WHY something happened (e.g. SVB collapse needs macro backdrop)
 - When question asks about market REACTION TO an event, market needs
@@ -79,6 +124,11 @@ Dependency decision guide:
 - Fed COMMUNICATIONS (what the Fed said) → filings only, never macro
 - Fed rate DATA (what rates numerically were) → macro only, never filings
 - Mixed question (what Fed said + rate/inflation data) → filings + macro
+  in parallel, no dependency between them
+- Insider trades / news sentiment → sentiment only, never filings
+- "Did the stock react to insider buying?" → sentiment + market in parallel,
+  market does NOT depend on sentiment (run simultaneously)
+- "What do insiders think AND what does the 10-K say?" → sentiment + filings
   in parallel, no dependency between them
 
 Respond ONLY with valid JSON, no other text, no markdown:

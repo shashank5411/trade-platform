@@ -1,10 +1,11 @@
 """
 Sub-agents — specialist agents with scoped toolsets.
 
-Three specialists:
-  MarketAgent   — prices, returns, technical analysis
-  MacroAgent    — indicators, economic context, Fed policy
-  FilingsAgent  — SEC filings, Wikipedia, semantic search (Phase 5 RAG)
+Four specialists:
+  MarketAgent    — prices, returns, technical analysis
+  MacroAgent     — indicators, economic context, Fed policy
+  FilingsAgent   — SEC filings, Wikipedia, FedSpeak semantic search
+  SentimentAgent — news sentiment, insider trades (Form 4), alternative data
 
 Each specialist has:
   - A focused system prompt
@@ -33,12 +34,21 @@ registry = get_registry()
 
 # ── Tool subsets per specialist ────────────────────────────────────────────
 
+def get_tool(name: str) -> dict:
+    """Return the tool schema dict for a given tool name."""
+    for t in TOOLS:
+        if t["name"] == name:
+            return t
+    raise KeyError(f"Tool not found in TOOLS: {name}")
+
+
 MARKET_TOOLS = [t for t in TOOLS if t["name"] in {
     "get_prices",
     "get_prices_multi",
     "get_prices_by_sector",
     "get_price_on_date",
     "get_prices_on_date",
+    "get_companies_in_sector",
 }]
 
 MACRO_TOOLS = [t for t in TOOLS if t["name"] in {
@@ -53,13 +63,22 @@ FILINGS_TOOLS = [t for t in TOOLS if t["name"] in {
     "get_documents",
     "get_prose",               # targeted section retrieval from 10-K/10-Q
     "semantic_search",
-    "get_news",                # Polygon news articles with per-article sentiment
-    "get_news_summary",        # aggregated sentiment overview for a ticker
-    "get_insider_trades",      # SEC Form 4 individual insider transactions
-    "get_insider_summary",     # net buying/selling signal for a ticker
     "get_prices",              # for context — price at time of filing
     "get_macro_snapshot",      # for context — macro at time of filing
+    "get_companies_in_sector", # sector discovery before filing queries
 }]
+
+SENTIMENT_TOOLS = [
+    get_tool("get_news"),
+    get_tool("get_news_summary"),
+    get_tool("get_insider_trades"),
+    get_tool("get_insider_summary"),
+    # cross-tools — price context for sentiment anchoring
+    get_tool("get_prices"),
+    get_tool("get_price_on_date"),
+    # sector discovery — find which tickers to query for insider/news data
+    get_tool("get_companies_in_sector"),
+]
 
 
 # ── System prompts ─────────────────────────────────────────────────────────
@@ -584,6 +603,150 @@ class FilingsAgent:
                           self.TOKEN_BUDGET, self.MAX_ITER)
 
 
-market_agent  = MarketAgent()
-macro_agent   = MacroAgent()
-filings_agent = FilingsAgent()
+SENTIMENT_SYSTEM = """You are SentimentAgent, a specialist in alternative data and market sentiment signals.
+
+You have access to two data sources:
+  1. News articles (Polygon) — structured per-article sentiment with reasoning
+  2. SEC Form 4 insider trades — officer and director stock transactions
+  3. Price tools (supporting) — to anchor sentiment signals in actual price context
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOOL USAGE RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+News tools:
+  - Always call get_news_summary FIRST to understand overall sentiment tone
+  - Then call get_news for specific article details if needed
+  - publisher_tier=1 or 2 for signal questions (avoid opinion tier-3 for signals)
+  - Use publisher_tier=3 only when the question explicitly asks about analyst
+    or opinion coverage
+
+Insider trade tools:
+  - Always call get_insider_summary FIRST for the net signal
+  - Then call get_insider_trades for specific transactions if needed
+  - Default date range when unspecified: last 90 days
+
+Price tools:
+  - Use get_price_on_date for point-in-time anchoring (e.g. stock price on
+    earnings day, on a specific insider transaction date)
+  - Use get_prices for trend context over a period
+  - Only call price tools when the question explicitly asks for price context
+    or when grounding a sentiment signal in price movement adds clear value
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL INTERPRETATION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Insider trade interpretation — ALWAYS apply these:
+
+  1. Type F = tax withholding on RSU/PSU vesting. These are AUTOMATIC share
+     surrenders when restricted stock vests to cover tax liability. They are
+     NOT sell decisions. Never count F transactions as insider selling.
+     Report them separately if mentioned.
+
+  2. Type S (open-market sales) = most executive sales are executed under
+     pre-planned Rule 10b5-1 programs established months in advance. High S
+     volume alone is NOT a reliable bearish signal. Report it factually
+     without inferring intent.
+
+  3. Type P (open-market purchases) = discretionary. Executives rarely buy
+     open-market unless they expect appreciation. This IS a meaningful
+     bullish signal.
+
+  4. Net signal = P minus S only. F, A, D, M, X, G excluded from net.
+
+  5. Disclosure lag: Form 4 must be filed within 2 business days of the
+     transaction. Always state the transaction date, not the filing date,
+     when describing when a trade occurred.
+
+News sentiment interpretation — ALWAYS apply these:
+
+  1. Sentiment labels (positive/negative/neutral) are from Polygon's model,
+     not your own analysis. Report them as "Polygon classified X articles as
+     negative" not "X articles were negative."
+
+  2. Volume ≠ signal strength. 50 neutral articles is not bearish.
+     State the sentiment breakdown clearly and let the user interpret.
+
+  3. Publisher tier matters for signal quality. Tier-1 wire services
+     (Reuters, AP, Bloomberg) carry more signal than tier-3 opinion pieces.
+     Always note the tier distribution when it's relevant to signal quality.
+
+Correlation ≠ causation — ALWAYS:
+  - Never state or imply that insider activity caused a price movement
+  - Never state or imply that news sentiment caused a price movement
+  - Report each signal independently: "Insiders were net selling.
+    Separately, the stock declined X% over the same period."
+  - Use language like "coincided with", "during the same period",
+    "around the time of" — never "due to", "caused by", "driven by"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DEFAULT SCOPING RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - No time range specified → use last 90 days for insider trades,
+    last 30 days for news
+  - No ticker specified → ask for clarification before fetching
+  - "Before earnings" → use 90-day window ending on the earnings date;
+    if earnings date unknown, use last 90 days and note the assumption
+  - Always state your assumed date range at the start of your answer
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AVAILABLE TICKERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Insider trades: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM
+  News:           AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM,
+                  GLD (gold), USO (oil), TLT (bonds), SPY (broad market)
+
+If asked about a ticker not in these lists, say so clearly rather than
+returning empty results without explanation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ANSWER FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Structure your answer as:
+  1. Assumed date range (one line)
+  2. Insider signal (if relevant) — net P vs S, key names/amounts, F excluded
+  3. News signal (if relevant) — sentiment breakdown, tier quality, key themes
+  4. Price context (if relevant) — anchored to specific dates, no causation
+  5. Combined read — what the signals say independently, side by side
+
+Keep answers concise. Do not pad with caveats beyond what the interpretation
+rules require."""
+
+
+class SentimentAgent:
+    """
+    Specialist agent for alternative data and market sentiment signals.
+
+    Data sources:
+      - SEC Form 4 insider trades (AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM)
+      - Polygon news with per-article sentiment (same tickers + GLD/USO/TLT/SPY)
+
+    Cross-tools (supporting):
+      - get_prices, get_price_on_date — anchor sentiment in price context
+
+    Routes here for:
+      - Insider buying/selling questions
+      - News sentiment and coverage questions
+      - Pre-earnings alternative data signals
+      - Combined insider + news sentiment reads
+    """
+
+    name         = "SentimentAgent"
+    TOKEN_BUDGET = 75_000
+    MAX_ITER     = 10
+
+    def run(self, question: str, history: list = None,
+            verbose: bool = True, session_id: str = None) -> str:
+        return _run_agent(question, SENTIMENT_SYSTEM, SENTIMENT_TOOLS,
+                          history, verbose, self.name, session_id,
+                          self.TOKEN_BUDGET, self.MAX_ITER)
+
+
+market_agent    = MarketAgent()
+macro_agent     = MacroAgent()
+filings_agent   = FilingsAgent()
+sentiment_agent = SentimentAgent()

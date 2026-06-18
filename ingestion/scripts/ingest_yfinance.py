@@ -47,13 +47,35 @@ def fetch_ticker_meta(ticker: str) -> dict:
         raw_ex = getattr(fast, "exchange", "NMS")
         info   = t.info
         return {
-            "exchange": EXCHANGE_NORMALIZE.get(raw_ex, "NASDAQ"),
-            "currency": getattr(fast, "currency", "USD"),
-            "sector":   info.get("sector", ""),
-            "industry": info.get("industry", ""),
+            "exchange":       EXCHANGE_NORMALIZE.get(raw_ex, "NASDAQ"),
+            "currency":       getattr(fast, "currency", "USD"),
+            "sector":         info.get("sector", ""),
+            "industry":       info.get("industry", ""),
+            "company_name":   info.get("longName", ""),
+            "market_cap":     info.get("marketCap", None),
+            "employees":      info.get("fullTimeEmployees", None),
+            "beta":           info.get("beta", None),
+            "dividend_yield": info.get("dividendYield", None),
+            "pe_ratio":       info.get("trailingPE", None),
+            "forward_pe":     info.get("forwardPE", None),
+            "week52_high":    info.get("fiftyTwoWeekHigh", None),
+            "week52_low":     info.get("fiftyTwoWeekLow", None),
+            "avg_volume_10d": info.get("averageVolume", None),
+            "avg_volume_3m":  info.get("averageDailyVolume3Month", None),
+            "city":           info.get("city", ""),
+            "state":          info.get("state", ""),
+            "country":        info.get("country", ""),
+            "description":    info.get("longBusinessSummary", "")[:500],
         }
     except Exception:
-        return {"exchange": "NASDAQ", "currency": "USD", "sector": "", "industry": ""}
+        return {
+            "exchange": "NASDAQ", "currency": "USD", "sector": "", "industry": "",
+            "company_name": "", "market_cap": None, "employees": None,
+            "beta": None, "dividend_yield": None, "pe_ratio": None,
+            "forward_pe": None, "week52_high": None, "week52_low": None,
+            "avg_volume_10d": None, "avg_volume_3m": None,
+            "city": "", "state": "", "country": "", "description": "",
+        }
 
 
 def _arg(name: str, default: str = "") -> str:
@@ -123,10 +145,25 @@ def fetch_market_data(tickers: list, start: str, end: str) -> dict[str, list]:
     for ticker, records in per_ticker.items():
         meta = fetch_ticker_meta(ticker)
         for r in records:
-            r["exchange"] = meta["exchange"]
-            r["currency"] = meta["currency"]
-            r["sector"]   = meta["sector"]
-            r["industry"] = meta["industry"]
+            r["exchange"]       = meta["exchange"]
+            r["currency"]       = meta["currency"]
+            r["sector"]         = meta["sector"]
+            r["industry"]       = meta["industry"]
+            r["company_name"]   = meta["company_name"]
+            r["market_cap"]     = meta["market_cap"]
+            r["employees"]      = meta["employees"]
+            r["beta"]           = meta["beta"]
+            r["dividend_yield"] = meta["dividend_yield"]
+            r["pe_ratio"]       = meta["pe_ratio"]
+            r["forward_pe"]     = meta["forward_pe"]
+            r["week52_high"]    = meta["week52_high"]
+            r["week52_low"]     = meta["week52_low"]
+            r["avg_volume_10d"] = meta["avg_volume_10d"]
+            r["avg_volume_3m"]  = meta["avg_volume_3m"]
+            r["city"]           = meta["city"]
+            r["state"]          = meta["state"]
+            r["country"]        = meta["country"]
+            r["description"]    = meta["description"]
 
     total = sum(len(v) for v in per_ticker.values())
     print(f"  {total} OHLCV rows across {len(tickers)} tickers")

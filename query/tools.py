@@ -148,6 +148,62 @@ TOOLS = [
     },
 
     {
+        "name": "get_companies_in_sector",
+        "description": (
+            "Look up which companies are tracked in a given sector or industry. "
+            "Use this as STEP 1 before get_prices_multi, get_insider_summary, "
+            "or get_news_summary when the question names a sector/industry "
+            "rather than specific tickers. "
+            "Returns ticker list, company names, market cap, beta, dividend "
+            "yield, location, and industry breakdown. "
+            "The 'Tickers:' line at the bottom can be passed directly into "
+            "get_prices_multi or other multi-ticker tools as step 2. "
+            "Examples: 'which energy companies do we track?', "
+            "'show me technology sector companies', "
+            "'find oil and gas companies for price comparison'. "
+            "Sector names: Technology, Energy, Financials, Health Care, "
+            "Consumer Discretionary, Industrials, Communication Services, "
+            "Utilities, Real Estate, Materials, Consumer Staples."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sector": {
+                    "type": "string",
+                    "description": (
+                        "Sector name. Must match exactly: Technology, Energy, "
+                        "Financials, Health Care, Consumer Discretionary, "
+                        "Industrials, Communication Services, Utilities, "
+                        "Real Estate, Materials, Consumer Staples."
+                    )
+                },
+                "industry": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Narrow to specific industry within sector. "
+                        "Examples: Semiconductors, Oil & Gas Integrated, "
+                        "Internet Content & Information, Banks—Diversified, "
+                        "Consumer Electronics, Software—Infrastructure."
+                    )
+                },
+                "min_market_cap": {
+                    "type": "number",
+                    "description": (
+                        "Optional. Minimum market cap filter in dollars. "
+                        "Examples: 1e11 (>$100B large cap), 1e10 (>$10B mid cap)."
+                    )
+                },
+                "sp500_only": {
+                    "type": "boolean",
+                    "description": "Optional. True to return only S&P 500 members.",
+                    "default": False
+                }
+            },
+            "required": ["sector"]
+        }
+    },
+
+    {
         "name": "get_price_on_date",
         "description": (
             "Fetch the price of a SINGLE TICKER on a SPECIFIC DATE. "
@@ -615,8 +671,17 @@ TOOLS = [
             "or selling AAPL before earnings?', 'show me JPM insider trades this "
             "year', 'did any executives sell stock recently?'. "
             "Available tickers: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM. "
-            "transaction_type: P=purchase, S=sale, A=award, D=disposition. "
-            "Use get_insider_summary first for the net buying/selling signal, "
+            "Transaction type key — IMPORTANT for correct interpretation:\n"
+            "  P = Open-market purchase (discretionary — strongest bullish signal)\n"
+            "  S = Open-market sale (may be a pre-planned Rule 10b5-1 program "
+            "set up months in advance — NOT necessarily bearish)\n"
+            "  F = Tax withholding on RSU/PSU vesting — shares auto-surrendered "
+            "to cover taxes when restricted stock vests. NOT a sell decision. "
+            "Do NOT count F transactions as selling.\n"
+            "  A = Award/grant (no cash outlay by insider)\n"
+            "  D = Disposition to trust or charity (not open-market)\n"
+            "  M/X = Option exercise\n"
+            "Use get_insider_summary first for the net signal, "
             "then get_insider_trades for individual transactions."
         ),
         "input_schema": {
@@ -630,8 +695,13 @@ TOOLS = [
                 "end":   {"type": "string", "description": "End date YYYY-MM-DD"},
                 "transaction_type": {
                     "type": "string",
-                    "enum": ["P", "S", "A", "D", "F"],
-                    "description": "P=purchase, S=sale, A=award, D=disposition, F=tax withholding"
+                    "enum": ["P", "S", "A", "D", "F", "M", "X", "G", "J"],
+                    "description": (
+                        "Filter by type. P=open-market purchase, S=open-market sale, "
+                        "F=tax withholding on RSU vesting (NOT a sell), "
+                        "A=award, D=disposition, M/X=option exercise, G=gift, J=other. "
+                        "Omit to return all types."
+                    )
                 },
                 "limit": {
                     "type": "integer",
@@ -646,14 +716,20 @@ TOOLS = [
     {
         "name": "get_insider_summary",
         "description": (
-            "Get aggregated insider trading signal for a ticker — net buying vs "
-            "selling, total value, number of insiders active. Use FIRST before "
-            "get_insider_trades to understand overall insider sentiment. "
-            "High net buying = bullish insider signal. "
-            "High net selling = bearish insider signal (but may include tax/option "
-            "transactions — check transaction types). "
-            "Use for: 'are insiders bullish on AAPL?', 'net insider activity for "
-            "JPM this quarter', 'insider sentiment before earnings'."
+            "Get aggregated insider trading signal for a ticker — net open-market "
+            "buying vs selling, broken down by transaction type with explanations. "
+            "IMPORTANT interpretation rules built into the output:\n"
+            "  - Net signal = open-market purchases (P) minus open-market sales (S) only\n"
+            "  - F transactions (RSU tax withholding) are reported separately "
+            "and excluded from the net signal — they are automatic, not discretionary\n"
+            "  - Most executive S sales are pre-planned Rule 10b5-1 programs — "
+            "high S volume alone is not a reliable bearish indicator\n"
+            "  - P purchases are more reliably bullish — executives rarely buy "
+            "open-market unless they expect gains\n"
+            "Use FIRST before get_insider_trades to understand overall insider "
+            "sentiment. Use for: 'are insiders bullish on AAPL?', "
+            "'net insider activity for JPM this quarter', "
+            "'insider sentiment before earnings'."
         ),
         "input_schema": {
             "type": "object",
@@ -735,8 +811,9 @@ def get_registry():
         "get_prose":               api.get_prose,
         "semantic_search":         api.semantic_search,
         "get_fed_communications":  api.get_fed_communications,
-        "get_news":                api.get_news,
-        "get_news_summary":        api.get_news_summary,
-        "get_insider_trades":      api.get_insider_trades,
-        "get_insider_summary":     api.get_insider_summary,
+        "get_news":                    api.get_news,
+        "get_news_summary":            api.get_news_summary,
+        "get_insider_trades":          api.get_insider_trades,
+        "get_insider_summary":         api.get_insider_summary,
+        "get_companies_in_sector":     api.get_companies_in_sector,
     }

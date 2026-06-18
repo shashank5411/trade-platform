@@ -51,6 +51,9 @@ BASE_URL     = "https://data.sec.gov"   # submissions API
 ARCHIVES_URL = "https://www.sec.gov"    # filing Archives (data.sec.gov returns 404 here)
 DELAY_SEC    = 0.15   # 150ms between EDGAR requests — safely under 10 req/s
 
+# Save tracker every N filings to survive mid-ticker timeouts
+CHECKPOINT_EVERY = 50
+
 # Dev companies: ticker → CIK mapping
 # CIKs are zero-padded to 10 digits for EDGAR API calls
 TICKER_CIKS = {
@@ -72,9 +75,9 @@ def _arg_parser():
                    help="Process single ticker only (for testing)")
     return p.parse_known_args()[0]
 
-args       = _arg_parser()
-START_DATE = args.start_date or ("2020-01-01" if ENV == "dev" else "2000-01-01")
-start_dt   = datetime.date.fromisoformat(START_DATE)
+args        = _arg_parser()
+START_DATE  = args.start_date or ("2020-01-01" if ENV == "dev" else "2000-01-01")
+start_dt    = datetime.date.fromisoformat(START_DATE)
 ONLY_TICKER = args.ticker
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
@@ -140,9 +143,9 @@ def get_form4_filings(cik: str) -> list:
     filings = []
     recent  = data.get("filings", {}).get("recent", {})
 
-    forms       = recent.get("form", [])
-    accessions  = recent.get("accessionNumber", [])
-    dates       = recent.get("filingDate", [])
+    forms      = recent.get("form", [])
+    accessions = recent.get("accessionNumber", [])
+    dates      = recent.get("filingDate", [])
 
     for form, acc, date in zip(forms, accessions, dates):
         if form != "4":
@@ -154,9 +157,9 @@ def get_form4_filings(cik: str) -> list:
         if filing_date < start_dt:
             continue
         filings.append({
-            "accession":    acc.replace("-", ""),
-            "filing_date":  date,
-            "form_type":    form,
+            "accession":   acc.replace("-", ""),
+            "filing_date": date,
+            "form_type":   form,
         })
 
     # Handle pagination — companies with >1000 filings
@@ -252,15 +255,14 @@ def parse_form4(xml_text: str, ticker: str, accession: str) -> list:
         if name_el is not None:
             filer_name = (name_el.text or "").strip()
 
-        # Role — can be multiple
-        roles = []
+        roles   = []
         role_el = reporting_owner.find(".//reportingOwnerRelationship")
         if role_el is not None:
             role_map = {
-                "isDirector":       "Director",
-                "isOfficer":        None,  # use officerTitle
-                "isTenPercentOwner":"10% Owner",
-                "isOther":          None,  # use otherText
+                "isDirector":        "Director",
+                "isOfficer":         None,   # use officerTitle
+                "isTenPercentOwner": "10% Owner",
+                "isOther":           None,   # use otherText
             }
             for tag, label in role_map.items():
                 el = role_el.find(tag)
@@ -287,7 +289,7 @@ def parse_form4(xml_text: str, ticker: str, accession: str) -> list:
 
             transaction_date = get_text("transactionDate/value") or \
                                get_text("transactionDate")
-            transaction_code = get_text("transactionCode")  # P, S, A, D, etc.
+            transaction_code = get_text("transactionCode")
             shares_str       = get_text("transactionShares/value") or \
                                get_text("transactionShares")
             price_str        = get_text("transactionPricePerShare/value") or \
@@ -297,18 +299,15 @@ def parse_form4(xml_text: str, ticker: str, accession: str) -> list:
             ownership_type   = get_text("directOrIndirectOwnership/value") or \
                                get_text("directOrIndirectOwnership")
 
-            # Skip transactions with no date or shares
             if not transaction_date or not shares_str:
                 continue
 
-            shares = float(shares_str.replace(",", "")) if shares_str else 0.0
-            price  = float(price_str.replace(",", "")) if price_str else 0.0
+            shares      = float(shares_str.replace(",", "")) if shares_str else 0.0
+            price       = float(price_str.replace(",", ""))  if price_str  else 0.0
             owned_after = float(owned_after_str.replace(",", "")) \
                           if owned_after_str else 0.0
+            value_usd   = shares * price if price > 0 else 0.0
 
-            value_usd = shares * price if price > 0 else 0.0
-
-            # Generate stable filing_id
             filing_id = hashlib.sha256(
                 f"{accession}|{filer_name}|{transaction_date}|{transaction_code}|{shares_str}"
                 .encode()
@@ -348,7 +347,6 @@ def upload_filing(ticker: str, accession: str, transactions: list) -> None:
         Bucket=RAW_BUCKET, Key=key, Body=body,
         ContentEncoding="gzip", ContentType="application/json"
     )
-    print(f"  Uploaded {len(transactions)} txns → {key}")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
@@ -364,44 +362,59 @@ def main():
     for ticker, cik in tickers.items():
         print(f"\n── {ticker} (CIK: {cik}) ──")
 
-        tracker   = load_tracker(ticker)
-        fetched   = set(tracker.get("fetched_accessions", []))
+        tracker = load_tracker(ticker)
+        fetched = set(tracker.get("fetched_accessions", []))
 
         time.sleep(DELAY_SEC)
         filings = get_form4_filings(cik)
         print(f"  Found {len(filings)} Form 4 filings since {START_DATE}")
 
         new_filings = [f for f in filings if f["accession"] not in fetched]
-        print(f"  {len(new_filings)} new filings to fetch")
+        print(f"  {len(new_filings)} new (tracker has {len(fetched)} already fetched)")
 
-        ticker_txns = 0
-        for filing in new_filings:
+        if not new_filings:
+            print(f"  Nothing to do for {ticker}")
+            continue
+
+        ticker_txns    = 0
+        ticker_filings = 0
+
+        for i, filing in enumerate(new_filings):
             acc = filing["accession"]
-            time.sleep(DELAY_SEC)
+
+            # Filing-level log so CloudWatch shows exactly where a timeout cuts off
+            print(f"  [{i + 1}/{len(new_filings)}] {acc}  filed={filing['filing_date']}")
 
             xml_text = fetch_form4_xml(cik, acc)
             if not xml_text:
-                print(f"  WARN: Could not fetch XML for {acc}")
-                fetched.add(acc)  # mark as attempted to avoid retry loop
-                continue
-
-            transactions = parse_form4(xml_text, ticker, acc)
-            if not transactions:
-                print(f"  SKIP: No non-derivative transactions in {acc}")
+                print(f"    WARN: Could not fetch XML — marking attempted")
                 fetched.add(acc)
-                continue
+            else:
+                transactions = parse_form4(xml_text, ticker, acc)
+                if not transactions:
+                    print(f"    SKIP: No non-derivative transactions")
+                    fetched.add(acc)
+                else:
+                    upload_filing(ticker, acc, transactions)
+                    fetched.add(acc)
+                    ticker_txns    += len(transactions)
+                    ticker_filings += 1
+                    print(f"    OK: {len(transactions)} txns uploaded")
 
-            upload_filing(ticker, acc, transactions)
-            fetched.add(acc)
-            ticker_txns    += len(transactions)
-            total_filings  += 1
+            # Checkpoint every N filings — survives mid-ticker timeout on rerun
+            if (i + 1) % CHECKPOINT_EVERY == 0:
+                tracker["fetched_accessions"] = list(fetched)
+                tracker["last_ingest"] = datetime.datetime.utcnow().isoformat() + "Z"
+                save_tracker(ticker, tracker)
+                print(f"  ── checkpoint at filing {i + 1}/{len(new_filings)} ──")
 
-        total_txns += ticker_txns
-        print(f"  {ticker}: {ticker_txns} transactions from {len(new_filings)} filings")
+        total_txns    += ticker_txns
+        total_filings += ticker_filings
+        print(f"  {ticker} done: {ticker_txns} txns from {ticker_filings} filings")
 
-        # Save tracker after each ticker
+        # Final save for this ticker
         tracker["fetched_accessions"] = list(fetched)
-        tracker["last_ingest"]        = datetime.datetime.utcnow().isoformat() + "Z"
+        tracker["last_ingest"] = datetime.datetime.utcnow().isoformat() + "Z"
         save_tracker(ticker, tracker)
 
     print(f"\n[ingest_insiders] Done — {total_txns} transactions from {total_filings} filings")

@@ -579,6 +579,61 @@ class TradePlatformStack(Stack):
                 ),
             )
 
+        # ── etl_companies: yfinance metadata → companies reference table ──────
+        etl_companies_asset = s3_assets.Asset(
+            self, "EtlCompaniesScriptAsset",
+            path="ingestion/etl/etl_companies.py",
+        )
+        etl_companies_asset.grant_read(job_role)
+
+        etl_companies_job = glue.CfnJob(
+            self, "EtlCompaniesJob",
+            name=f"{env_name}-trade-companies-etl",
+            role=job_role.role_arn,
+            command=glue.CfnJob.JobCommandProperty(
+                name="pythonshell",
+                python_version="3.9",
+                script_location=(
+                    f"s3://{etl_companies_asset.s3_bucket_name}"
+                    f"/{etl_companies_asset.s3_object_key}"
+                ),
+            ),
+            default_arguments={
+                "--extra-py-files": (
+                    f"s3://{ingestion_pkg.s3_bucket_name}"
+                    f"/{ingestion_pkg.s3_object_key}"
+                ),
+                "--additional-python-modules": ETL_MODULES_BASE,
+                "--ENVIRONMENT": env_name,
+                "--job-language": "python",
+            },
+            glue_version="3.0",
+            max_capacity=0.0625,
+            timeout=15,
+            description=f"[{env_name}] yfinance raw → companies reference table",
+        )
+
+        glue.CfnTrigger(
+            self, "EtlCompaniesTrigger",
+            name=f"{env_name}-trade-companies-etl-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(
+                job_name=etl_companies_job.ref
+            )],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="AND",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=f"{env_name}-trade-yfinance-etl",
+                        state="SUCCEEDED",
+                    )
+                ],
+            ),
+            description=f"[{env_name}] Fire etl_companies after etl_yfinance succeeds",
+        )
+
         # ── SEC ETL chain ─────────────────────────────────────────────────────
         etl_sec_job = glue.CfnJob(
             self, "EtlSecJob",
@@ -1176,7 +1231,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=60,
+            timeout=90,
             description=f"[{env_name}] SEC Form 4 insider trades ingestion",
         )
 
