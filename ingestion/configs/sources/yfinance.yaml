@@ -1,61 +1,519 @@
 default_start_date:
-  dev: "2020-01-01"
+  dev: "2023-01-01"
   prod: "2000-01-01"
 frequency: daily
 max_lookback_days: 30
 
 tickers:
-  # Existing US equities
-  - AAPL
-  - MSFT
-  - GOOGL
-  - AMZN
-  - JPM
-  - BAC
-  - XOM
-  - NVDA
-  - META
-  - TSLA
-  - BRK-B
-  - V
-  - MA
-  - UNH
-  - JNJ
-  - WMT
-  - CVX
-  - COST
-  - GS
-  - PFE
-  - SPY
+  # ── S&P 500 Equities ──────────────────────────────────────────────────
+
+  # Technology (48)
+  - AAPL   # Apple
+  - MSFT   # Microsoft
+  - NVDA   # Nvidia
+  - AVGO   # Broadcom
+  - ORCL   # Oracle
+  - CRM    # Salesforce
+  - AMD    # Advanced Micro Devices
+  - QCOM   # Qualcomm
+  - ACN    # Accenture
+  - INTU   # Intuit
+  - IBM    # IBM
+  - TXN    # Texas Instruments
+  - NOW    # ServiceNow
+  - AMAT   # Applied Materials
+  - MU     # Micron Technology
+  - LRCX   # Lam Research
+  - ADI    # Analog Devices
+  - KLAC   # KLA Corporation
+  - MCHP   # Microchip Technology
+  - CDNS   # Cadence Design
+  - SNPS   # Synopsys
+  - FTNT   # Fortinet
+  - ANSS   # Ansys
+  - NTAP   # NetApp
+  - AKAM   # Akamai
+  - GLW    # Corning
+  - HPQ    # HP Inc
+  - HPE    # Hewlett Packard Enterprise
+  - JNPR   # Juniper Networks
+  - FFIV   # F5 Networks
+  - KEYS   # Keysight Technologies
+  - VRSN   # VeriSign
+  - CTSH   # Cognizant
+  - IT     # Gartner
+  - CDW    # CDW Corporation
+  - SWKS   # Skyworks Solutions
+  - MPWR   # Monolithic Power Systems
+  - ENPH   # Enphase Energy
+  - TER    # Teradyne
+  - ZBRA   # Zebra Technologies
+  - PTC    # PTC Inc
+  - EPAM   # EPAM Systems
+  - LDOS   # Leidos
+  - TRMB   # Trimble
+  - GEN    # Gen Digital
+  - GDDY   # GoDaddy
+  - WDC    # Western Digital
+  - TDY    # Teledyne Technologies
+
+  # Communication Services (22)
+  - GOOGL  # Alphabet Class A
+  - GOOG   # Alphabet Class C
+  - META   # Meta Platforms
+  - NFLX   # Netflix
+  - DIS    # Walt Disney
+  - CMCSA  # Comcast
+  - VZ     # Verizon
+  - T      # AT&T
+  - TMUS   # T-Mobile
+  - CHTR   # Charter Communications
+  - PARA   # Paramount Global
+  - WBD    # Warner Bros Discovery
+  - OMC    # Omnicom
+  - IPG    # Interpublic Group
+  - EA     # Electronic Arts
+  - TTWO   # Take-Two Interactive
+  - MTCH   # Match Group
+  - LYV    # Live Nation
+  - NWS    # News Corp Class B
+  - NWSA   # News Corp Class A
+  - FOX    # Fox Corp Class B
+  - FOXA   # Fox Corp Class A
+
+  # Consumer Discretionary (46)
+  - AMZN   # Amazon
+  - TSLA   # Tesla
+  - HD     # Home Depot
+  - MCD    # McDonald's
+  - NKE    # Nike
+  - LOW    # Lowe's
+  - SBUX   # Starbucks
+  - TJX    # TJX Companies
+  - BKNG   # Booking Holdings
+  - CMG    # Chipotle
+  - GM     # General Motors
+  - F      # Ford Motor
+  - ORLY   # O'Reilly Automotive
+  - AZO    # AutoZone
+  - ROST   # Ross Stores
+  - DHI    # D.R. Horton
+  - LEN    # Lennar
+  - PHM    # PulteGroup
+  - NVR    # NVR Inc
+  - TOL    # Toll Brothers
+  - YUM    # Yum! Brands
+  - DRI    # Darden Restaurants
+  - HLT    # Hilton Worldwide
+  - MAR    # Marriott International
+  - MGM    # MGM Resorts
+  - LVS    # Las Vegas Sands
+  - WYNN   # Wynn Resorts
+  - RCL    # Royal Caribbean
+  - CCL    # Carnival Corporation
+  - NCLH   # Norwegian Cruise Line
+  - EBAY   # eBay
+  - ETSY   # Etsy
+  - W      # Wayfair
+  - BBY    # Best Buy
+  - GPS    # Gap
+  - KMX    # CarMax
+  - AN     # AutoNation
+  - GPC    # Genuine Parts
+  - APTV   # Aptiv
+  - BWA    # BorgWarner
+  - TSCO   # Tractor Supply
+  - DG     # Dollar General
+  - DLTR   # Dollar Tree
+  - POOL   # Pool Corporation
+  - HAS    # Hasbro
+  - MHK    # Mohawk Industries
+
+  # Consumer Staples (30)
+  - WMT    # Walmart
+  - PG     # Procter & Gamble
+  - COST   # Costco
+  - KO     # Coca-Cola
+  - PEP    # PepsiCo
+  - PM     # Philip Morris
+  - MO     # Altria Group
+  - MDLZ   # Mondelez International
+  - CL     # Colgate-Palmolive
+  - KMB    # Kimberly-Clark
+  - EL     # Estee Lauder
+  - CHD    # Church & Dwight
+  - CLX    # Clorox
+  - SJM    # J.M. Smucker
+  - HRL    # Hormel Foods
+  - CPB    # Campbell Soup
+  - CAG    # Conagra Brands
+  - GIS    # General Mills
+  - K      # Kellanova
+  - KHC    # Kraft Heinz
+  - MKC    # McCormick
+  - TSN    # Tyson Foods
+  - ADM    # Archer-Daniels-Midland
+  - BG     # Bunge Global
+  - INGR   # Ingredion
+  - KR     # Kroger
+  - SYY    # Sysco
+  - USFD   # US Foods
+  - COTY   # Coty
+  - MNST   # Monster Beverage
+
+  # Financials (62)
+  - BRK-B  # Berkshire Hathaway Class B
+  - JPM    # JPMorgan Chase
+  - V      # Visa
+  - MA     # Mastercard
+  - BAC    # Bank of America
+  - WFC    # Wells Fargo
+  - GS     # Goldman Sachs
+  - MS     # Morgan Stanley
+  - AXP    # American Express
+  - BLK    # BlackRock
+  - SCHW   # Charles Schwab
+  - C      # Citigroup
+  - CB     # Chubb
+  - MMC    # Marsh & McLennan
+  - AON    # Aon
+  - SPGI   # S&P Global
+  - MCO    # Moody's
+  - ICE    # Intercontinental Exchange
+  - CME    # CME Group
+  - CBOE   # Cboe Global Markets
+  - NDAQ   # Nasdaq Inc
+  - TRV    # Travelers Companies
+  - AFL    # Aflac
+  - ALL    # Allstate
+  - PRU    # Prudential Financial
+  - MET    # MetLife
+  - AIG    # American International Group
+  - GL     # Globe Life
+  - HIG    # Hartford Financial
+  - LNC    # Lincoln National
+  - UNM    # Unum Group
+  - PFG    # Principal Financial
+  - CINF   # Cincinnati Financial
+  - RJF    # Raymond James
+  - NTRS   # Northern Trust
+  - STT    # State Street
+  - BK     # Bank of New York Mellon
+  - USB    # U.S. Bancorp
+  - PNC    # PNC Financial
+  - TFC    # Truist Financial
+  - CFG    # Citizens Financial
+  - HBAN   # Huntington Bancshares
+  - RF     # Regions Financial
+  - KEY    # KeyCorp
+  - FITB   # Fifth Third Bancorp
+  - MTB    # M&T Bank
+  - ZION   # Zions Bancorporation
+  - CMA    # Comerica
+  - FHN    # First Horizon
+  - WAL    # Western Alliance
+  - WRB    # W.R. Berkley
+  - RE     # Everest Group
+  - EG     # Everest Re Group
+  - ERIE   # Erie Indemnity
+  - FDS    # FactSet Research
+  - MSCI   # MSCI Inc
+  - BR     # Broadridge Financial
+  - FIS    # Fidelity National Information
+  - FI     # Fiserv
+  - GPN    # Global Payments
+  - PYPL   # PayPal
+  - SQ     # Block Inc
+
+  # Health Care (51)
+  - UNH    # UnitedHealth Group
+  - JNJ    # Johnson & Johnson
+  - LLY    # Eli Lilly
+  - ABBV   # AbbVie
+  - MRK    # Merck
+  - TMO    # Thermo Fisher Scientific
+  - ABT    # Abbott Laboratories
+  - DHR    # Danaher
+  - MDT    # Medtronic
+  - BMY    # Bristol-Myers Squibb
+  - AMGN   # Amgen
+  - GILD   # Gilead Sciences
+  - ISRG   # Intuitive Surgical
+  - SYK    # Stryker
+  - BSX    # Boston Scientific
+  - ZBH    # Zimmer Biomet
+  - BAX    # Baxter International
+  - BDX    # Becton Dickinson
+  - EW     # Edwards Lifesciences
+  - HOLX   # Hologic
+  - IDXX   # IDEXX Laboratories
+  - IQV    # IQVIA Holdings
+  - A      # Agilent Technologies
+  - WAT    # Waters Corporation
+  - MTD    # Mettler-Toledo
+  - TECH   # Bio-Techne
+  - ALGN   # Align Technology
+  - HSIC   # Henry Schein
+  - VTRS   # Viatris
+  - CTLT   # Catalent
+  - CRL    # Charles River Laboratories
+  - DGX    # Quest Diagnostics
+  - LH     # Labcorp
+  - HCA    # HCA Healthcare
+  - CNC    # Centene
+  - ELV    # Elevance Health
+  - HUM    # Humana
+  - CI     # Cigna
+  - CVS    # CVS Health
+  - MCK    # McKesson
+  - ABC    # AmerisourceBergen
+  - CAH    # Cardinal Health
+  - VRTX   # Vertex Pharmaceuticals
+  - REGN   # Regeneron Pharmaceuticals
+  - BIIB   # Biogen
+  - MRNA   # Moderna
+  - ZTS    # Zoetis
+  - MOH    # Molina Healthcare
+  - PFE    # Pfizer
+  - GEHC   # GE HealthCare
+  - IQVIA  # IQVIA Holdings (alt symbol)
+
+  # Industrials (55)
+  - HON    # Honeywell
+  - UPS    # United Parcel Service
+  - RTX    # RTX Corporation (Raytheon)
+  - BA     # Boeing
+  - LMT    # Lockheed Martin
+  - GE     # GE Aerospace
+  - CAT    # Caterpillar
+  - DE     # Deere & Company
+  - MMM    # 3M
+  - EMR    # Emerson Electric
+  - ETN    # Eaton Corporation
+  - ITW    # Illinois Tool Works
+  - PH     # Parker Hannifin
+  - ROK    # Rockwell Automation
+  - AME    # Ametek
+  - FTV    # Fortive
+  - FAST   # Fastenal
+  - GWW    # W.W. Grainger
+  - XYL    # Xylem
+  - IR     # Ingersoll Rand
+  - DOV    # Dover Corporation
+  - GNRC   # Generac Holdings
+  - OTIS   # Otis Worldwide
+  - CARR   # Carrier Global
+  - TT     # Trane Technologies
+  - JCI    # Johnson Controls
+  - SWK    # Stanley Black & Decker
+  - MAS    # Masco
+  - ALLE   # Allegion
+  - LII    # Lennox International
+  - JBHT   # J.B. Hunt Transport
+  - EXPD   # Expeditors International
+  - CHRW   # C.H. Robinson
+  - FDX    # FedEx
+  - CSX    # CSX Corporation
+  - UNP    # Union Pacific
+  - NSC    # Norfolk Southern
+  - ODFL   # Old Dominion Freight
+  - SAIA   # Saia Inc
+  - AXON   # Axon Enterprise
+  - HWM    # Howmet Aerospace
+  - TDG    # TransDigm Group
+  - HEI    # HEICO Corporation
+  - PCAR   # PACCAR
+  - CMI    # Cummins
+  - AGCO   # AGCO Corporation
+  - TXT    # Textron
+  - GD     # General Dynamics
+  - NOC    # Northrop Grumman
+  - HII    # Huntington Ingalls
+  - CACI   # CACI International
+  - SAIC   # Science Applications
+  - SPR    # Spirit AeroSystems
+  - CP     # Canadian Pacific Kansas City
+  - CNI    # Canadian National Railway
+
+  # Energy (36)
+  - XOM    # ExxonMobil
+  - CVX    # Chevron
+  - COP    # ConocoPhillips
+  - EOG    # EOG Resources
+  - SLB    # SLB (Schlumberger)
+  - MPC    # Marathon Petroleum
+  - PSX    # Phillips 66
+  - VLO    # Valero Energy
+  - OXY    # Occidental Petroleum
+  - HES    # Hess Corporation
+  - DVN    # Devon Energy
+  - FANG   # Diamondback Energy
+  - APA    # APA Corporation
+  - MRO    # Marathon Oil
+  - HAL    # Halliburton
+  - BKR    # Baker Hughes
+  - NOV    # NOV Inc
+  - HP     # Helmerich & Payne
+  - CIVI   # Civitas Resources
+  - SM     # SM Energy
+  - RRC    # Range Resources
+  - EQT    # EQT Corporation
+  - CNX    # CNX Resources
+  - AR     # Antero Resources
+  - OVV    # Ovintiv
+  - MTDR   # Matador Resources
+  - PR     # Permian Resources
+  - TRGP   # Targa Resources
+  - KMI    # Kinder Morgan
+  - WMB    # Williams Companies
+  - OKE    # ONEOK
+  - ET     # Energy Transfer
+  - EPD    # Enterprise Products Partners
+  - PXD    # Pioneer Natural Resources
+  - WHD    # Cactus Inc
+  - ESTE   # Earthstone Energy
+
+  # Materials (30)
+  - LIN    # Linde
+  - APD    # Air Products
+  - SHW    # Sherwin-Williams
+  - ECL    # Ecolab
+  - DD     # DuPont
+  - DOW    # Dow Inc
+  - LYB    # LyondellBasell
+  - PPG    # PPG Industries
+  - EMN    # Eastman Chemical
+  - CTVA   # Corteva
+  - FMC    # FMC Corporation
+  - MOS    # Mosaic Company
+  - CF     # CF Industries
+  - NUE    # Nucor
+  - STLD   # Steel Dynamics
+  - RS     # Reliance Steel
+  - ATI    # ATI Inc
+  - AA     # Alcoa
+  - ALB    # Albemarle
+  - FCX    # Freeport-McMoRan
+  - NEM    # Newmont
+  - AEM    # Agnico Eagle Mines
+  - GOLD   # Barrick Gold
+  - CCK    # Crown Holdings
+  - PKG    # Packaging Corp of America
+  - IP     # International Paper
+  - WRK    # WestRock
+  - SON    # Sonoco Products
+  - AVNT   # Avient Corporation
+  - RPM    # RPM International
+
+  # Real Estate (41)
+  - AMT    # American Tower
+  - PLD    # Prologis
+  - CCI    # Crown Castle
+  - EQIX   # Equinix
+  - PSA    # Public Storage
+  - O      # Realty Income
+  - WELL   # Welltower
+  - DLR    # Digital Realty
+  - SPG    # Simon Property Group
+  - AVB    # AvalonBay Communities
+  - EQR    # Equity Residential
+  - ESS    # Essex Property Trust
+  - MAA    # Mid-America Apartment
+  - UDR    # UDR Inc
+  - CPT    # Camden Property Trust
+  - HST    # Host Hotels & Resorts
+  - RHP    # Ryman Hospitality
+  - SUI    # Sun Communities
+  - ELS    # Equity LifeStyle Properties
+  - AMH    # American Homes 4 Rent
+  - INVH   # Invitation Homes
+  - CUBE   # CubeSmart
+  - EXR    # Extra Space Storage
+  - IRM    # Iron Mountain
+  - SBAC   # SBA Communications
+  - GLPI   # Gaming and Leisure Properties
+  - VICI   # VICI Properties
+  - COLD   # Americold Realty Trust
+  - KIM    # Kimco Realty
+  - REG    # Regency Centers
+  - FRT    # Federal Realty
+  - BXP    # BXP Inc (Boston Properties)
+  - SLG    # SL Green Realty
+  - HIW    # Highwoods Properties
+  - VTR    # Ventas
+  - PEAK   # Healthpeak Properties
+  - ARE    # Alexandria Real Estate
+  - OHI    # Omega Healthcare
+  - MPW    # Medical Properties Trust
+  - HR     # Healthcare Realty
+  - LSI    # Life Storage
+
+  # Utilities (34)
+  - NEE    # NextEra Energy
+  - DUK    # Duke Energy
+  - SO     # Southern Company
+  - D      # Dominion Energy
+  - EXC    # Exelon
+  - AEP    # American Electric Power
+  - XEL    # Xcel Energy
+  - SRE    # Sempra Energy
+  - PEG    # Public Service Enterprise
+  - WEC    # WEC Energy Group
+  - ES     # Eversource Energy
+  - DTE    # DTE Energy
+  - FE     # FirstEnergy
+  - ETR    # Entergy
+  - PPL    # PPL Corporation
+  - AEE    # Ameren
+  - CMS    # CMS Energy
+  - CNP    # CenterPoint Energy
+  - NI     # NiSource
+  - LNT    # Alliant Energy
+  - EVRG   # Evergy
+  - ATO    # Atmos Energy
+  - SWX    # Southwest Gas
+  - UGI    # UGI Corporation
+  - NJR    # New Jersey Resources
+  - AWK    # American Water Works
+  - CWT    # California Water Service
+  - WTRG   # Essential Utilities
+  - OGE    # OGE Energy
+  - NWE    # NorthWestern Energy
+  - PNW    # Pinnacle West Capital
+  - AVA    # Avista Corporation
+  - SR     # Spire Inc
+  - IDACORP # Idaho Power
+
+  # ── Global Indices ─────────────────────────────────────────────────────
 
   # US indices
-  - "^GSPC"    # S&P 500
-  - "^DJI"     # Dow Jones
-  - "^IXIC"    # NASDAQ Composite
-  - "^RUT"     # Russell 2000 (small caps)
-  - "^VIX"     # Volatility index — fear gauge
+  - "^GSPC"     # S&P 500
+  - "^DJI"      # Dow Jones Industrial Average
+  - "^IXIC"     # NASDAQ Composite
+  - "^RUT"      # Russell 2000 (small caps)
+  - "^VIX"      # CBOE Volatility Index — fear gauge
 
   # European indices
-  - "^FTSE"    # FTSE 100 UK
-  - "^GDAXI"   # DAX Germany
-  - "^FCHI"    # CAC 40 France
+  - "^FTSE"     # FTSE 100 UK
+  - "^GDAXI"    # DAX Germany
+  - "^FCHI"     # CAC 40 France
   - "^STOXX50E" # Euro Stoxx 50
 
   # Asia Pacific
-  - "^N225"    # Nikkei 225 Japan
-  - "^HSI"     # Hang Seng Hong Kong
-  - "^NSEI"    # Nifty 50 India
-  - "^AXJO"    # ASX 200 Australia
-  - "^KS11"    # KOSPI South Korea
+  - "^N225"     # Nikkei 225 Japan
+  - "^HSI"      # Hang Seng Hong Kong
+  - "^NSEI"     # Nifty 50 India
+  - "^AXJO"     # ASX 200 Australia
+  - "^KS11"     # KOSPI South Korea
 
-  # Commodities (futures)
-  - "GC=F"     # Gold futures
-  - "CL=F"     # Crude oil WTI futures
-  - "SI=F"     # Silver futures
-  - "NG=F"     # Natural gas futures
+  # ── Commodities (futures) ──────────────────────────────────────────────
+  - "GC=F"      # Gold futures
+  - "CL=F"      # Crude oil WTI futures
+  - "SI=F"      # Silver futures
+  - "NG=F"      # Natural gas futures
 
-  # FX / Dollar
-  - "DX-Y.NYB" # DXY — US Dollar Index
+  # ── FX / Dollar ───────────────────────────────────────────────────────
+  - "DX-Y.NYB"  # DXY — US Dollar Index
   - "EURUSD=X"  # EUR/USD
   - "GBPUSD=X"  # GBP/USD
   - "USDJPY=X"  # USD/JPY

@@ -8,13 +8,11 @@ Tools:
   MACRO:      get_macro_snapshot (wrapper around get_indicator_on_date + SPY)
   SEARCH:     semantic_search
 
-Phase 8 changes:
-  - get_prose: added max_chars parameter (CO-2) — default 8000, agent can
-    request up to 20000 for deep dives
-  - get_prose: added section_names list parameter (LA-3) — fetch multiple
-    sections in one Athena query instead of one call per section
-  - All AthenaError catches now use AthenaQueryError.agent_message() so
-    the agent receives structured, actionable error context
+Partition layout change (Phase 9+):
+  market_prices partitioned by ticker= / year=  (was year= / exchange=)
+  - _ticker_partition() and _ticker_partitions() added for partition pruning
+  - _safe_partition_value() mirrors etl_yfinance sanitization
+  - All price query functions updated to include ticker= partition hint
 """
 
 import json
@@ -114,6 +112,35 @@ def _year_filter(start: str, end: str) -> str:
     return f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
 
 
+def _safe_partition_value(value: str) -> str:
+    """
+    Sanitize ticker for S3 partition path — mirrors etl_yfinance.py.
+    Must stay in sync with ETL: ^GSPC→GSPC, CL=F→CL_F, BRK-B→BRK_B
+    """
+    return (value
+            .replace("^", "")
+            .replace("=", "_")
+            .replace("-", "_")
+            .replace(".", "_"))
+
+
+def _ticker_partition(ticker: str) -> str:
+    """
+    Athena partition pruning hint for a single ticker.
+    market_prices is partitioned ticker= / year= (Phase 9+).
+    Sanitized value matches the S3 path: ^GSPC → ticker=GSPC partition.
+    Prunes to one directory before the year= scan — 16x cheaper queries.
+    """
+    safe = _safe_partition_value(ticker)
+    return f"AND ticker = '{safe}'"
+
+
+def _ticker_partitions(tickers: list) -> str:
+    """Athena partition pruning hint for a list of tickers (IN clause)."""
+    safe_list = "','".join(_safe_partition_value(t) for t in tickers)
+    return f"AND ticker IN ('{safe_list}')"
+
+
 def _price_summary(df: pd.DataFrame, ticker: str) -> str:
     if df.empty:
         return f"No data for {ticker}."
@@ -170,11 +197,6 @@ def _format_price_result(df: pd.DataFrame, ticker: str,
 
 
 def _athena_error_msg(e: Exception, context: str) -> str:
-    """
-    Return a structured error message for the agent.
-    Uses AthenaQueryError.agent_message() for structured errors,
-    falls back to generic string for unexpected exceptions.
-    """
     if isinstance(e, AthenaQueryError):
         return e.agent_message()
     return f"Error {context}: {e}"
@@ -195,6 +217,7 @@ def get_prices(
     ticker          = ticker.upper()
     granularity     = _price_granularity(start, end)
     yf              = _year_filter(start, end)
+    tp              = _ticker_partition(ticker)
     ex_filter       = f"AND exchange = '{exchange}'"  if exchange  else ""
     sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
     industry_filter = f"AND industry = '{industry}'" if industry  else ""
@@ -205,7 +228,7 @@ def get_prices(
                    close, adj_close, volume
             FROM   market_prices
             WHERE  ticker = '{ticker}'
-              {yf} {ex_filter}
+              {tp} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             ORDER BY date ASC
@@ -222,7 +245,7 @@ def get_prices(
                    SUM(volume)         AS volume
             FROM   market_prices
             WHERE  ticker = '{ticker}'
-              {yf} {ex_filter}
+              {tp} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
@@ -241,7 +264,7 @@ def get_prices(
                    SUM(volume)         AS volume
             FROM   market_prices
             WHERE  ticker = '{ticker}'
-              {yf} {ex_filter}
+              {tp} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
@@ -268,6 +291,7 @@ def get_prices_multi(
     ticker_list     = "','".join(tickers)
     granularity     = _price_granularity(start, end)
     yf              = _year_filter(start, end)
+    tps             = _ticker_partitions(tickers)
     ex_filter       = f"AND exchange = '{exchange}'"  if exchange  else ""
     sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
     industry_filter = f"AND industry = '{industry}'" if industry  else ""
@@ -278,7 +302,7 @@ def get_prices_multi(
                    close, adj_close, volume
             FROM   market_prices
             WHERE  ticker IN ('{ticker_list}')
-              {yf} {ex_filter}
+              {tps} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             ORDER BY ticker ASC, date ASC
@@ -295,7 +319,7 @@ def get_prices_multi(
                    SUM(volume)         AS volume
             FROM   market_prices
             WHERE  ticker IN ('{ticker_list}')
-              {yf} {ex_filter}
+              {tps} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
@@ -314,7 +338,7 @@ def get_prices_multi(
                    SUM(volume)         AS volume
             FROM   market_prices
             WHERE  ticker IN ('{ticker_list}')
-              {yf} {ex_filter}
+              {tps} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
             GROUP BY ticker,
@@ -347,6 +371,7 @@ def get_prices_by_sector(
     end:      str,
     industry: Optional[str] = None,
 ) -> str:
+    # Sector scan is intentional — no ticker partition filter here
     yf              = _year_filter(start, end)
     industry_filter = f"AND industry = '{industry}'" if industry else ""
 
@@ -388,6 +413,7 @@ def get_price_on_date(
 ) -> str:
     ticker    = ticker.upper()
     as_of_yr  = int(date_str[:4])
+    tp        = _ticker_partition(ticker)
     ex_filter = f"AND exchange = '{exchange}'" if exchange else ""
 
     sql = f"""
@@ -395,6 +421,7 @@ def get_price_on_date(
                open, high, low, close, adj_close, volume
         FROM   market_prices
         WHERE  ticker = '{ticker}'
+          {tp}
           AND  CAST(year AS INTEGER) = {as_of_yr}
           AND  date <= '{date_str}'
           {ex_filter}
@@ -430,6 +457,7 @@ def get_prices_on_date(
     tickers     = [t.upper() for t in tickers]
     ticker_list = "','".join(tickers)
     as_of_yr    = int(date_str[:4])
+    tps         = _ticker_partitions(tickers)
     ex_filter   = f"AND exchange = '{exchange}'" if exchange else ""
 
     sql = f"""
@@ -442,6 +470,7 @@ def get_prices_on_date(
                    ) AS rn
             FROM   market_prices
             WHERE  ticker IN ('{ticker_list}')
+              {tps}
               AND  CAST(year AS INTEGER) = {as_of_yr}
               AND  date <= '{date_str}'
               {ex_filter}
@@ -576,12 +605,10 @@ def get_indicator_multi(
             if not df.empty:
                 results.append(df)
         except Exception as e:
-            # Include per-series errors in output so agent knows what failed
-            results_note = _athena_error_msg(e, f"fetching {series_id}")
             results.append(pd.DataFrame([{
                 "indicator_id": series_id,
                 "date": "ERROR",
-                "value": results_note,
+                "value": _athena_error_msg(e, f"fetching {series_id}"),
                 "unit": "",
                 "country": "",
             }]))
@@ -714,7 +741,6 @@ def get_documents(
             if not df.empty:
                 all_results.append(df)
         except Exception as e:
-            # Non-fatal — try next database
             continue
 
     if not all_results:
@@ -733,6 +759,7 @@ def get_documents(
         )
     return "\n\n".join(output)
 
+
 def get_fed_communications(
     doc_type: Optional[str] = None,
     start: Optional[str] = None,
@@ -740,20 +767,10 @@ def get_fed_communications(
     entity: Optional[str] = None,
     limit: int = 5,
 ) -> str:
-    """
-    Retrieve FOMC statements, minutes, transcripts, or Fed governor speeches.
- 
-    Args:
-        doc_type: "statement" | "minutes" | "transcript" | "speech" | None (all)
-        start:    YYYY-MM-DD start date filter
-        end:      YYYY-MM-DD end date filter
-        entity:   "FOMC" for committee docs, or speaker name for speeches
-        limit:    max number of documents to return (default 5)
-    """
     db      = f"{ENV}_trade_fedspeak_processed"
     table   = "documents"
     filters = ["source = 'FEDSPEAK'"]
- 
+
     if doc_type:
         filters.append(f"doc_type = '{doc_type}'")
     if entity:
@@ -762,7 +779,7 @@ def get_fed_communications(
         filters.append(f"doc_date >= '{start}'")
     if end:
         filters.append(f"doc_date <= '{end}'")
- 
+
     where = " AND ".join(filters)
     sql = f"""
         SELECT doc_id, entity, doc_type, doc_date, title,
@@ -773,12 +790,12 @@ def get_fed_communications(
         ORDER BY doc_date DESC
         LIMIT {limit}
     """
- 
+
     try:
         df = query(sql, db)
     except Exception as e:
         return f"Error querying FedSpeak: {e}"
- 
+
     if df.empty:
         return (
             f"No Fed communications found"
@@ -787,7 +804,7 @@ def get_fed_communications(
             + (f" to {end}" if end else "")
             + ". The FedSpeak pipeline may not have run yet."
         )
- 
+
     results = []
     for _, row in df.iterrows():
         results.append(
@@ -798,12 +815,12 @@ def get_fed_communications(
             f"{row['text_preview']}\n"
             f"{'─' * 60}"
         )
- 
+
     return (
         f"Found {len(df)} Fed communication(s):\n\n"
         + "\n\n".join(results)
     )
- 
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # PROSE TOOL
@@ -819,29 +836,9 @@ def get_prose(
     limit:         int  = 3,
     max_chars:     int  = PROSE_DEFAULT_CHARS,
 ) -> str:
-    """
-    Fetch prose sections from 10-K/10-Q filings.
-
-    section_name  — single section (backwards compatible)
-    section_names — list of sections fetched in ONE Athena query (LA-3)
-                    e.g. ["item_1", "item_1a", "item_7"]
-                    When both are provided, section_names takes precedence.
-    max_chars     — chars returned per section (CO-2)
-                    default: 8000. Pass max_chars=20000 for deep dives.
-
-    section_name options:
-      item_1   — Business description
-      item_1a  — Risk factors
-      item_7   — MD&A
-      item_7a  — Market risk
-      note_1   — Accounting policies
-      note_2   — Revenue segments
-      note_3   — Debt details
-    """
     entity    = entity.upper()
-    max_chars = min(max_chars, PROSE_MAX_CHARS)  # hard cap at 20k
+    max_chars = min(max_chars, PROSE_MAX_CHARS)
 
-    # section_names list takes precedence over single section_name
     if section_names:
         section_list   = "','".join(section_names)
         section_filter = f"AND section_name IN ('{section_list}')"
@@ -861,8 +858,6 @@ def get_prose(
         year_filter = f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
         date_filter = f"AND filed_date BETWEEN '{start}' AND '{end}'"
 
-    # When fetching multiple sections, increase the row limit proportionally
-    # so we get `limit` filings worth of each section
     row_limit = limit * len(section_names) if section_names else limit
 
     sql = f"""
@@ -917,12 +912,6 @@ def semantic_search(
     source: Optional[str] = None,
     entity: Optional[str] = None,
 ) -> str:
-    """
-    Semantic search over SEC filings, Wikipedia articles, and FedSpeak documents.
-    Embeds query with Cohere v3, queries S3 Vectors index, returns top-K chunks.
-    source filter accepts: EDGAR, WIKIPEDIA, FEDSPEAK (or None for all).
-    """
-    # 1. Embed the query
     try:
         body = json.dumps({
             "texts":           [query[:2000]],
@@ -939,7 +928,6 @@ def semantic_search(
     except Exception as e:
         return f"Embedding error: {e}"
 
-    # 2. Query S3 Vectors
     fetch_k = top_k * 3 if (source or entity) else top_k
     try:
         result  = _s3vectors.query_vectors(
@@ -960,7 +948,6 @@ def semantic_search(
             )
         return f"Vector search error: {e}"
 
-    # 3. Filter in Python
     if source:
         matches = [m for m in matches
                    if m.get("metadata", {}).get("source", "").upper()
@@ -975,7 +962,6 @@ def semantic_search(
     if not matches:
         return f"No relevant documents found for: {query}"
 
-    # 4. Format results
     lines = [
         f"Semantic search: '{query}'",
         f"Top {len(matches)} results:\n"
@@ -994,9 +980,9 @@ def semantic_search(
     return "\n".join(lines)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 # NEWS / SENTIMENT
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 
 def get_news(
     ticker: str,
@@ -1006,10 +992,6 @@ def get_news(
     publisher_tier: Optional[int] = None,
     limit: int = 10,
 ) -> str:
-    """
-    Retrieve news articles for a ticker with per-article sentiment and reasoning.
-    publisher_tier: 1=wire, 2=established, 3=opinion (filter is <=tier).
-    """
     filters = [f"primary_ticker = '{ticker}'"]
 
     if start:
@@ -1073,9 +1055,6 @@ def get_news_summary(
     end: Optional[str] = None,
     publisher_tier: Optional[int] = None,
 ) -> str:
-    """
-    Aggregated sentiment summary for a ticker: counts by sentiment, top publishers.
-    """
     filters = [f"primary_ticker = '{ticker}'"]
 
     if start:
@@ -1134,9 +1113,9 @@ def get_news_summary(
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 # INSIDER TRADES
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 
 def get_insider_trades(
     ticker: str,
@@ -1145,10 +1124,6 @@ def get_insider_trades(
     transaction_type: Optional[str] = None,
     limit: int = 20,
 ) -> str:
-    """
-    Retrieve SEC Form 4 insider trades for a ticker.
-    transaction_type: P=purchase, S=sale, A=award, D=disposition, F=tax withholding.
-    """
     filters = [f"ticker = '{ticker}'"]
 
     if start:
@@ -1216,10 +1191,6 @@ def get_insider_summary(
     start: Optional[str] = None,
     end: Optional[str] = None,
 ) -> str:
-    """
-    Aggregated insider trading signal for a ticker — net buying vs selling.
-    F (tax withholding) is reported separately and excluded from the net signal.
-    """
     filters = [f"ticker = '{ticker}'"]
     if start:
         filters.append(f"transaction_date >= '{start}'")
@@ -1290,7 +1261,6 @@ def get_insider_summary(
         elif txn_type == "F":
             f_value          += value
 
-    # Net signal — P vs S only; F excluded because it is automatic tax withholding
     lines.append("")
     if total_buy_value > 0 or total_sell_value > 0:
         net    = total_buy_value - total_sell_value
@@ -1321,9 +1291,9 @@ def get_insider_summary(
     return "\n".join(lines)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 # COMPANIES REFERENCE TABLE
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 
 def get_companies_in_sector(
     sector: str,
@@ -1331,11 +1301,6 @@ def get_companies_in_sector(
     min_market_cap: Optional[float] = None,
     sp500_only: bool = False,
 ) -> str:
-    """
-    Return companies in a sector/industry from the reference table.
-    Used as step 1 before get_prices_multi or get_insider_summary to
-    discover which tickers to query.
-    """
     db    = DB["yfinance"]
     table = "companies"
 

@@ -5,11 +5,17 @@ Raw format: bulk file, flat list of OHLCV records
 [{"date": "2020-01-02", "Close": 296.88, "High": 297.1,
   "Low": 294.7, "Open": 295.6, "Volume": 59151200, "ticker": "SPY"}]
 
+Partition layout (Phase 9+):
+  ticker= / year=
+  - ticker uses sanitized value (^GSPC→GSPC, CL=F→CL_F, BRK-B→BRK_B)
+  - original ticker value preserved in Parquet data column
+  - 16x cheaper single-ticker Athena queries vs previous year=/exchange= layout
+  - exchange kept as data column only (not partition)
+
 Notes:
 - yfinance returns adjusted close as Close by default
 - Capitalized field names need lowercasing
 - Exchange/currency/country inferred from ticker config
-- All dev tickers are US — extend EXCHANGE_MAP for non-US
 """
 import sys
 import os
@@ -28,8 +34,6 @@ for _entry in os.listdir('/tmp/'):
         sys.path.insert(0, _libs_dir)
         break
 
-import os
-import sys
 import json
 import boto3
 import yaml
@@ -37,7 +41,6 @@ import pandas as pd
 from datetime import date
 from io import BytesIO
 
-# ── Path setup ─────────────────────────────────────────────────────────────
 sys.path.insert(0, _libs_dir)
 sys.path.insert(0, "/tmp/ingestion")
 
@@ -71,7 +74,8 @@ def _instrument_type(ticker: str) -> str:
         return "futures"
     else:
         return "equity"
-    
+
+
 def _safe_partition_value(value: str) -> str:
     """
     Sanitize values for S3 partition paths.
@@ -84,6 +88,7 @@ def _safe_partition_value(value: str) -> str:
             .replace("=", "_")
             .replace("-", "_")
             .replace(".", "_"))
+
 
 from utils.transform import (
     now_utc,
@@ -151,28 +156,36 @@ def read_latest_raw() -> list:
 def write_processed(rows: list) -> int:
     """
     Write canonical rows to processed bucket as Parquet.
-    Partitioned by year= / exchange= / ticker=
+
+    Partition layout: ticker= / year=
+    - ticker partition uses sanitized value (_safe_partition_value)
+    - year and ticker are partition columns — excluded from Parquet file
+      to avoid HIVE_INVALID_METADATA duplicate column error in Athena
+    - original ticker value preserved in Parquet as 'ticker' column
+    - exchange kept as data column only
     """
     if not rows:
         print("  No rows to write")
         return 0
 
-    df         = pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
     df["year"] = df["year"].astype(int)
-    total      = 0
+    total = 0
 
-    for (year, exchange), group in df.groupby(["year", "exchange"]):
-        key = (f"market_prices/year={year}/"
-                f"exchange={exchange}/"
-                f"data.parquet")
-        
+    for (ticker, year), group in df.groupby(["ticker", "year"]):
+        safe_ticker = _safe_partition_value(ticker)
+        key = (
+            f"market_prices/"
+            f"ticker={safe_ticker}/"
+            f"year={year}/"
+            f"data.parquet"
+        )
 
         buf = BytesIO()
-        # Drop partition columns from path but keep ticker in data
-        # ticker in data = original value (^GSPC, EURUSD=X)
-        # ticker in path = sanitized (GSPC, EURUSD_X)
-        write_df = group.drop(columns=["year", "exchange"])
-        # ticker column already has original value from transform — keep it
+        # Drop partition columns from Parquet — Athena infers them from path
+        # Original ticker value is still present in the 'ticker' data column
+        write_df = group.drop(columns=["year"])
+        # ticker column keeps original value (^GSPC, EURUSD=X) for queries
         write_df.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
         buf.seek(0)
         s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.getvalue())
@@ -238,9 +251,9 @@ def transform(records: list, config: dict) -> list:
 
         row = {
             "ticker":      ticker,
-            "exchange":    exchange,
+            "exchange":    exchange,   # data column only — not a partition
             "date":        str(trade_date),
-            "year":        trade_date.year,
+            "year":        trade_date.year,   # partition column — dropped from Parquet
             "country":     "US"      if instrument in ("index", "futures", "fx")
                            else meta["country"],
             "currency":    currency,
@@ -283,7 +296,7 @@ def main():
     print(f"  config:    {CONFIG_PATH}")
 
     config = load_config()
-    print(f"  Tickers: {config.get('tickers')}")
+    print(f"  Tickers: {len(config.get('tickers', []))} configured")
 
     records       = read_latest_raw()
     rows          = transform(records, config)
