@@ -6,6 +6,7 @@ that the DAG executor uses to run agents in the right order,
 parallelizing where possible.
 """
 
+import datetime
 import os
 import json
 import anthropic
@@ -24,7 +25,8 @@ PLANNER_MODEL = (
 from query.config import get_client
 client = get_client()
 
-PLANNER_SYSTEM = f"""
+PLANNER_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. Use this to resolve relative date references and to determine what is historical (in the past) vs future (after today). Data is available from 2020-01-01 onwards for dev environment.
+
 You are an execution planner for a financial intelligence platform.
 
 Available agents:

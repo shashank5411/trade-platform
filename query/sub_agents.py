@@ -13,6 +13,7 @@ Each specialist has:
   - Token budget, tool deduplication, telemetry, and reflexion
 """
 
+import datetime
 import os
 import json
 import anthropic
@@ -83,7 +84,8 @@ SENTIMENT_TOOLS = [
 
 # ── System prompts ─────────────────────────────────────────────────────────
 
-MARKET_SYSTEM = """
+MARKET_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. Market price data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, fetch the data and report what is available rather than assuming the date is invalid.
+
 You are a market data specialist. Your job is to answer questions
 about asset prices, returns, and market performance using fetched data.
 
@@ -113,7 +115,8 @@ Rules:
   state what date range was actually retrieved and what is missing
 """
 
-MACRO_SYSTEM = """
+MACRO_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. Economic indicator data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, fetch the data and report what is available rather than assuming the date is invalid.
+
 You are a macroeconomic specialist. Your job is to answer questions
 about economic indicators, monetary policy, and macro conditions.
 
@@ -137,7 +140,8 @@ Rules:
   performance will be provided by the MarketAgent
 """
 
-FILINGS_SYSTEM = """
+FILINGS_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. SEC filing and document data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, use what is available rather than assuming the date is invalid.
+
 You are a financial documents specialist. Your job is to answer
 qualitative questions about companies and economic concepts using
 SEC filings and reference documents.
@@ -603,7 +607,9 @@ class FilingsAgent:
                           self.TOKEN_BUDGET, self.MAX_ITER)
 
 
-SENTIMENT_SYSTEM = """You are SentimentAgent, a specialist in alternative data and market sentiment signals.
+SENTIMENT_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. News and insider trade data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, fetch the data and report what is available rather than assuming the date is invalid.
+
+You are SentimentAgent, a specialist in alternative data and market sentiment signals.
 
 You have access to two data sources:
   1. News articles (Polygon) — structured per-article sentiment with reasoning
