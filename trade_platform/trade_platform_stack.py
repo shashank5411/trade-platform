@@ -431,7 +431,7 @@ class TradePlatformStack(Stack):
         }
 
         TIMEOUT_OVERRIDE = {
-           "yfinance": 60,  # 479 S&P 500 tickers — yf.Ticker().info per-ticker
+           "yfinance": 150,  # 479 S&P 500 tickers — yf.Ticker().info per-ticker
                      # metadata calls add up beyond the default 30 min
         }
 
