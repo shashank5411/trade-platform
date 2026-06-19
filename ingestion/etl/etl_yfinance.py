@@ -128,8 +128,27 @@ def load_config() -> dict:
 
 # ── S3 helpers ─────────────────────────────────────────────────────────────
 
+def _run_timestamp(key: str) -> str:
+    """
+    Extract the run timestamp from a raw filename for sorting.
+
+    Filename format: yfinance_{start_date}_{end_date}_{TIMESTAMP}.json
+    e.g. yfinance_2023-01-01_2026-06-19_20260619T003428Z.json → 20260619T003428Z
+
+    BUG THIS FIXES: sorting on the full key string is wrong because the
+    filename also embeds the requested date RANGE before the timestamp.
+    A narrow recent-window run (e.g. start=2026-05-19) sorts AFTER a full
+    history backfill (start=2023-01-01) purely on string comparison of
+    "2026-05-19" > "2023-01-01" — even when the full-history run is the
+    more recent one by actual wall-clock time. Sorting on just the
+    trailing timestamp avoids this entirely.
+    """
+    filename = key.rsplit("/", 1)[-1]
+    return filename.rsplit("_", 1)[-1].replace(".json", "")
+
+
 def read_latest_raw() -> list:
-    """Read the latest bulk yfinance raw file from S3."""
+    """Read the most recently-run bulk yfinance raw file from S3."""
     paginator = s3.get_paginator("list_objects_v2")
     keys = []
     for page in paginator.paginate(Bucket=RAW_BUCKET):
@@ -141,7 +160,9 @@ def read_latest_raw() -> list:
             f"No raw files found under year= prefix in s3://{RAW_BUCKET}"
         )
 
-    latest_key = sorted(keys)[-1]
+    # Sort by embedded run timestamp, NOT the full key string.
+    # See _run_timestamp() docstring for why this matters.
+    latest_key = max(keys, key=_run_timestamp)
     print(f"  Reading s3://{RAW_BUCKET}/{latest_key}")
 
     obj     = s3.get_object(Bucket=RAW_BUCKET, Key=latest_key)
