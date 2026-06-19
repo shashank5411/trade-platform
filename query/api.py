@@ -106,6 +106,35 @@ def _indicator_granularity(start: str, end: str,
         return "daily"
 
 
+def _get_native_frequency(series_id: str, db: str) -> str:
+    """
+    Look up a series' actual stored frequency from the data itself, rather
+    than assuming. The `frequency` column is already stored correctly on
+    every row in economic_indicators (FRED's etl_fred.py infers it via
+    SERIES_FREQUENCY_OVERRIDE / FREQ_HINTS at ETL time; WorldBank rows are
+    always 'annual'). Reading it back here means the query layer never
+    needs to duplicate that classification logic — it just asks the data
+    what it actually is.
+
+    Falls back to 'monthly' only if no rows exist yet for this series
+    (e.g. not ingested yet) — same default behavior as before this fix,
+    so an uningested series doesn't error, it just gets the old behavior.
+    """
+    sql = f"""
+        SELECT frequency
+        FROM economic_indicators
+        WHERE indicator_id = '{series_id}'
+        LIMIT 1
+    """
+    try:
+        df = query(sql, db)
+        if not df.empty:
+            return df.iloc[0]["frequency"]
+    except Exception:
+        pass
+    return "monthly"
+
+
 def _year_filter(start: str, end: str) -> str:
     sy = int(start[:4])
     ey = int(end[:4])
@@ -514,20 +543,43 @@ def _indicator_agg_sql(series_id: str, start: str, end: str,
                         db: str) -> str:
     yf = _year_filter(start, end)
 
+    # Latest vintage per (date, country) — applied first, before any
+    # date-range filtering already baked into this subquery's WHERE, and
+    # before the aggregation/passthrough branches below. FRED is
+    # revision-only-append (etl_fred.py never deletes old vintage files),
+    # so a series can have multiple vintage rows for the same date —
+    # without this, results are duplicated/double-counted.
+    latest_vintage_subquery = f"""
+        SELECT indicator_id, indicator_name, date, value, unit,
+               frequency, country, vintage_date
+        FROM (
+            SELECT indicator_id, indicator_name, date, value, unit,
+                   frequency, country, vintage_date,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY indicator_id, country, date
+                       ORDER BY vintage_date DESC
+                   ) AS rn
+            FROM economic_indicators
+            WHERE indicator_id = '{series_id}'
+              {yf} {country_filter}
+              AND date BETWEEN '{start}' AND '{end}'
+        )
+        WHERE rn = 1
+    """
+
     if granularity == "annual":
         trunc = "year"
     elif granularity == "quarterly":
         trunc = "quarter"
     elif granularity == "monthly":
         trunc = "month"
-    else:
+    elif granularity == "weekly":
+        trunc = "week"
+    else:  # daily — genuine passthrough, no aggregation
         return f"""
             SELECT indicator_id, indicator_name, date,
                    value, unit, frequency, country, vintage_date
-            FROM   economic_indicators
-            WHERE  indicator_id = '{series_id}'
-              {yf} {country_filter}
-              AND date BETWEEN '{start}' AND '{end}'
+            FROM ({latest_vintage_subquery})
             ORDER BY date ASC, country ASC
         """
 
@@ -542,10 +594,7 @@ def _indicator_agg_sql(series_id: str, start: str, end: str,
                '{granularity}' AS frequency,
                country,
                MAX(vintage_date) AS vintage_date
-        FROM   economic_indicators
-        WHERE  indicator_id = '{series_id}'
-          {yf} {country_filter}
-          AND date BETWEEN '{start}' AND '{end}'
+        FROM ({latest_vintage_subquery})
         GROUP BY indicator_id, country,
                  DATE_TRUNC('{trunc}', CAST(date AS DATE))
         ORDER BY date ASC, country ASC
@@ -562,7 +611,7 @@ def get_indicator(
 ) -> str:
     db             = _indicator_db(series_id, source)
     country_filter = f"AND country = '{country}'" if country else ""
-    native_freq    = "monthly"
+    native_freq    = _get_native_frequency(series_id, db)
     granularity    = _indicator_granularity(start, end, native_freq)
 
     sql = _indicator_agg_sql(
@@ -596,14 +645,17 @@ def get_indicator_multi(
     countries:  Optional[list] = None,
     source:     Optional[str]  = None,
 ) -> str:
-    granularity = _indicator_granularity(start, end)
-    results     = []
+    results           = []
+    granularities_used = []
 
     for series_id in series_ids:
         db      = _indicator_db(series_id, source)
         country = countries[series_ids.index(series_id)] \
                   if countries else None
         country_filter = f"AND country = '{country}'" if country else ""
+        native_freq    = _get_native_frequency(series_id, db)
+        granularity    = _indicator_granularity(start, end, native_freq)
+        granularities_used.append((series_id, granularity))
 
         sql = _indicator_agg_sql(
             series_id, start, end, granularity, country_filter, db
@@ -625,9 +677,12 @@ def get_indicator_multi(
         return f"No data found for {series_ids} between {start} and {end}."
 
     combined = pd.concat(results).sort_values(["indicator_id", "date"])
+    granularity_summary = ", ".join(
+        f"{sid}={g}" for sid, g in granularities_used
+    )
     return (
         f"Indicators: {series_ids}\n"
-        f"Granularity: {granularity} | "
+        f"Granularities: {granularity_summary} | "
         f"Period: {start} → {end}\n\n"
         f"{combined[['indicator_id','date','value','unit','country']].to_string(index=False)}"
     )

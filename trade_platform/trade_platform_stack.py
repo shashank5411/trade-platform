@@ -416,6 +416,18 @@ class TradePlatformStack(Stack):
                 "pyarrow==14.0.2,"
                 "edgartools>=3.0.0"
             ),
+            # python-dateutil — month-chunking fix (2026-06-19) uses
+            # relativedelta directly. Pandas pulls in dateutil as a
+            # transitive dependency, but Glue Python Shell's base
+            # environment isn't guaranteed to expose it the same way —
+            # declare it explicitly rather than relying on that.
+            "yfinance": (
+                "yfinance>=0.2.0,"
+                "fredapi>=0.5.0,"
+                "wbdata==0.3.0,"
+                "pyyaml>=6.0.0,"
+                "python-dateutil>=2.8.0"
+            ),
         }
 
         TIMEOUT_OVERRIDE = {

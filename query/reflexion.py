@@ -76,7 +76,7 @@ def critique(
 ) -> dict:
     """Run critic on an answer. Returns {passed, issues, retry_guidance}."""
     tool_summary = "\n".join([
-        f"Tool: {t['name']}\nResult preview: {t['result_preview']}"
+        f"Tool: {t['name']}\nResult: {t.get('result_full', t['result_preview'])}"
         for t in tool_history
     ])
 

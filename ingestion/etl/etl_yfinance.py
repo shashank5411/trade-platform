@@ -137,45 +137,71 @@ def load_config() -> dict:
 
 # ── S3 helpers ─────────────────────────────────────────────────────────────
 
-def _run_timestamp(key: str) -> str:
+def _parse_chunk_filename(key: str):
     """
-    Extract the run timestamp from a raw filename for sorting.
+    Parse a chunked raw filename for its run timestamp and chunk number.
 
-    Filename format: yfinance_{start_date}_{end_date}_{TIMESTAMP}.json
-    e.g. yfinance_2023-01-01_2026-06-19_20260619T003428Z.json → 20260619T003428Z
+    Filename format (2026-06-19 chunking fix):
+      yfinance_{start_date}_{end_date}_{TIMESTAMP}_chunk{NNN}.json
+      e.g. yfinance_2023-01-01_2023-01-31_20260619T003428Z_chunk001.json
 
-    Sorting on the full key string is wrong because the filename also
-    embeds the requested date RANGE before the timestamp. A narrow
-    recent-window run (start=2026-05-19) can sort after a full history
-    backfill (start=2023-01-01) purely on string comparison. Sorting on
-    just the trailing timestamp avoids this.
+    Returns (timestamp, chunk_label) or None if the filename doesn't
+    match the expected chunk pattern (e.g. the separate metadata file,
+    which has no _chunk suffix and is handled by etl_companies.py).
+
+    Sorting/grouping on the full key string is wrong because the filename
+    also embeds the requested date RANGE before the timestamp — a narrow
+    recent-window chunk can sort after an older backfill chunk purely on
+    string comparison. Parsing out just the timestamp segment avoids this.
     """
     filename = key.rsplit("/", 1)[-1]
-    return filename.rsplit("_", 1)[-1].replace(".json", "")
+    if not filename.endswith(".json") or "_chunk" not in filename:
+        return None
+    stem  = filename[: -len(".json")]
+    parts = stem.split("_")
+    if len(parts) < 2:
+        return None
+    chunk_label = parts[-1]   # e.g. "chunk001"
+    timestamp   = parts[-2]   # e.g. "20260619T003428Z"
+    return timestamp, chunk_label
 
 
 def read_latest_raw() -> list:
-    """Read the most recently-run bulk yfinance raw file from S3."""
+    """
+    Read ALL price-chunk files from the most recent ingestion run.
+
+    A single run now produces multiple chunk files sharing the same
+    timestamp suffix (...{timestamp}_chunk{NNN}.json) plus one separate
+    metadata file (...{timestamp}.json, no _chunk suffix) — the metadata
+    file is EXCLUDED here; it's handled separately by etl_companies.py.
+    """
     paginator = s3.get_paginator("list_objects_v2")
     keys = []
     for page in paginator.paginate(Bucket=RAW_BUCKET):
         keys.extend([o["Key"] for o in page.get("Contents", [])])
 
     keys = [k for k in keys if k.startswith("year=")]
-    if not keys:
+    parsed = [(k, _parse_chunk_filename(k)) for k in keys]
+    parsed = [(k, p) for k, p in parsed if p is not None]
+    if not parsed:
         raise FileNotFoundError(
-            f"No raw files found under year= prefix in s3://{RAW_BUCKET}"
+            f"No raw chunk files found under year= prefix in s3://{RAW_BUCKET}"
         )
 
-    # Sort by embedded run timestamp, NOT the full key string.
-    latest_key = max(keys, key=_run_timestamp)
-    print(f"  Reading s3://{RAW_BUCKET}/{latest_key}")
+    # Identify the most recent run's timestamp, then collect ALL chunk
+    # files sharing that same timestamp.
+    latest_timestamp = max(timestamp for _, (timestamp, _) in parsed)
+    run_keys = sorted(k for k, (timestamp, _) in parsed
+                       if timestamp == latest_timestamp)
 
-    obj     = s3.get_object(Bucket=RAW_BUCKET, Key=latest_key)
-    records = json.loads(obj["Body"].read())
+    print(f"  Reading {len(run_keys)} chunk files from run {latest_timestamp}")
+    records = []
+    for key in run_keys:
+        obj = s3.get_object(Bucket=RAW_BUCKET, Key=key)
+        records.extend(json.loads(obj["Body"].read()))
 
     tickers = sorted(set(r["ticker"] for r in records))
-    print(f"  Loaded {len(records)} records — "
+    print(f"  Loaded {len(records)} total records — "
           f"{len(tickers)} tickers: {tickers}")
     return records
 

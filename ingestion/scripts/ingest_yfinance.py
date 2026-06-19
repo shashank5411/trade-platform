@@ -1,6 +1,17 @@
 """
 yfinance market data — incremental ingestion
 Dataset: per-ticker watermarks | Frequency: daily
+
+Chunking (OOM fix, 2026-06-19):
+  - Backfill range is split into calendar-month chunks; ALL tickers are
+    downloaded together within each chunk, but only one month's worth of
+    OHLCV data is held in memory at a time. Chunk size stays roughly
+    constant regardless of total backfill depth (a 20yr backfill just
+    means more chunks of the same size, not bigger chunks).
+  - Ticker metadata (sector, market_cap, description, etc.) is fetched
+    ONCE per run and written to a separate metadata file — it used to be
+    duplicated onto every OHLCV row, which dominated memory usage on a
+    multi-year backfill across hundreds of tickers.
 """
 import sys
 import os
@@ -22,11 +33,13 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import date, datetime, timezone
 
 import boto3
 import pandas as pd
 import yfinance as yf
+from dateutil.relativedelta import relativedelta
 
 from utils.config import get_default_start, load_source_config
 from utils.dates import current_date_str, subtract_days
@@ -78,6 +91,19 @@ def fetch_ticker_meta(ticker: str) -> dict:
         }
 
 
+def fetch_all_ticker_metadata(tickers: list) -> list:
+    """One metadata record per ticker, fetched ONCE per run (not per chunk) —
+    sector/market_cap/etc. don't vary by date range requested."""
+    ingested_at = datetime.now(timezone.utc).isoformat()
+    metadata = []
+    for ticker in tickers:
+        meta = fetch_ticker_meta(ticker)
+        meta["ticker"]      = ticker
+        meta["ingested_at"] = ingested_at
+        metadata.append(meta)
+    return metadata
+
+
 def _arg(name: str, default: str = "") -> str:
     for i, a in enumerate(sys.argv):
         if a == f"--{name}" and i + 1 < len(sys.argv):
@@ -111,7 +137,32 @@ def _resolve_start(tickers: list, config: dict, args) -> str:
     return subtract_days(oldest, config.get("max_lookback_days", 30))
 
 
+def _month_chunks(start: str, end: str) -> list:
+    """
+    Split a date range into calendar-month chunks: [(start, end), ...].
+
+    Chunking by calendar month (not ticker count) keeps chunk SIZE roughly
+    constant regardless of total backfill depth — a 20-year backfill just
+    means more chunks of the same small size, not bigger chunks. All
+    tickers are downloaded together within each chunk; only the date axis
+    is chunked.
+    """
+    start_dt = date.fromisoformat(start)
+    end_dt   = date.fromisoformat(end)
+    chunks   = []
+    cur      = start_dt
+    while cur <= end_dt:
+        chunk_end = min(
+            (cur + relativedelta(months=1)) - relativedelta(days=1),
+            end_dt
+        )
+        chunks.append((cur.isoformat(), chunk_end.isoformat()))
+        cur = cur + relativedelta(months=1)
+    return chunks
+
+
 def fetch_market_data(tickers: list, start: str, end: str) -> dict[str, list]:
+    """OHLCV only — metadata is fetched separately (see fetch_all_ticker_metadata)."""
     print(f"  Downloading {len(tickers)} tickers {start} → {end}...")
     raw = yf.download(
         tickers=tickers,
@@ -142,47 +193,14 @@ def fetch_market_data(tickers: list, start: str, end: str) -> dict[str, list]:
         df["Date"]   = df["Date"].dt.strftime("%Y-%m-%d")
         per_ticker[tickers[0]] = df.to_dict(orient="records")
 
-    for ticker, records in per_ticker.items():
-        meta = fetch_ticker_meta(ticker)
-        for r in records:
-            r["exchange"]       = meta["exchange"]
-            r["currency"]       = meta["currency"]
-            r["sector"]         = meta["sector"]
-            r["industry"]       = meta["industry"]
-            r["company_name"]   = meta["company_name"]
-            r["market_cap"]     = meta["market_cap"]
-            r["employees"]      = meta["employees"]
-            r["beta"]           = meta["beta"]
-            r["dividend_yield"] = meta["dividend_yield"]
-            r["pe_ratio"]       = meta["pe_ratio"]
-            r["forward_pe"]     = meta["forward_pe"]
-            r["week52_high"]    = meta["week52_high"]
-            r["week52_low"]     = meta["week52_low"]
-            r["avg_volume_10d"] = meta["avg_volume_10d"]
-            r["avg_volume_3m"]  = meta["avg_volume_3m"]
-            r["city"]           = meta["city"]
-            r["state"]          = meta["state"]
-            r["country"]        = meta["country"]
-            r["description"]    = meta["description"]
-
     total = sum(len(v) for v in per_ticker.values())
     print(f"  {total} OHLCV rows across {len(tickers)} tickers")
     return per_ticker
 
 
-def print_summary(df: pd.DataFrame) -> None:
-    print(f"\n{'='*60}")
-    print(f"Columns:    {list(df.columns)}")
-    print(f"Shape:      {df.shape}")
-    print(f"\nFirst 5 rows:\n{df.head().to_string()}")
-    print(f"\nData types:\n{df.dtypes.to_string()}")
-    print(f"\nNull counts:\n{df.isnull().sum().to_string()}")
-    print("=" * 60)
-
-
 def main():
-    args   = parse_args()
-    config = load_source_config(SOURCE)
+    args    = parse_args()
+    config  = load_source_config(SOURCE)
     tickers = config["tickers"]
 
     start_date = _resolve_start(tickers, config, args)
@@ -190,28 +208,71 @@ def main():
     source_label = "CLI" if args.start_date else "watermark/first-run"
     print(f"[{SOURCE}] {start_date} → {end_date}  ({source_label})")
 
-    timestamp  = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    per_ticker = fetch_market_data(tickers, start_date, end_date)
-
-    if not per_ticker:
-        print("No data returned.")
-        return
-
-    all_records = [r for rows in per_ticker.values() for r in rows]
+    timestamp   = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     year, month = timestamp[:4], timestamp[4:6]
-    key = f"year={year}/month={month}/{SOURCE}_{start_date}_{end_date}_{timestamp}.json"
-    S3.put_object(
-        Bucket=BUCKET,
-        Key=key,
-        Body=json.dumps(all_records, default=str, indent=2),
-        ContentType="application/json",
-    )
-    print(f"Uploaded → s3://{BUCKET}/{key}  ({len(all_records)} records)")
 
-    for ticker, rows in per_ticker.items():
-        update_watermark(SOURCE, ticker, end_date, "success", len(rows))
+    # Metadata: fetched ONCE for the whole run, not per chunk
+    print("  Fetching ticker metadata (once per run)...")
+    metadata_records = fetch_all_ticker_metadata(tickers)
 
-    print_summary(pd.DataFrame(all_records))
+    if metadata_records:
+        meta_key = f"year={year}/month={month}/{SOURCE}_metadata_{timestamp}.json"
+        S3.put_object(
+            Bucket=BUCKET,
+            Key=meta_key,
+            Body=json.dumps(metadata_records, default=str, indent=2),
+            ContentType="application/json",
+        )
+        print(f"  Uploaded metadata → s3://{BUCKET}/{meta_key} "
+              f"({len(metadata_records)} tickers)")
+
+    chunks = _month_chunks(start_date, end_date)
+    print(f"  Backfill split into {len(chunks)} month-chunks")
+
+    ticker_rows_seen = {t: 0 for t in tickers}
+
+    for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
+        print(f"\n  Chunk {i}/{len(chunks)}: {chunk_start} → {chunk_end}")
+        per_ticker = fetch_market_data(tickers, chunk_start, chunk_end)
+
+        if not per_ticker:
+            print(f"  No data for chunk {chunk_start}→{chunk_end}, skipping")
+            continue
+
+        all_records = [r for rows in per_ticker.values() for r in rows]
+        chunk_key = (f"year={year}/month={month}/"
+                     f"{SOURCE}_{chunk_start}_{chunk_end}_{timestamp}_"
+                     f"chunk{i:03d}.json")
+        S3.put_object(
+            Bucket=BUCKET,
+            Key=chunk_key,
+            Body=json.dumps(all_records, default=str, indent=2),
+            ContentType="application/json",
+        )
+        print(f"  Uploaded → s3://{BUCKET}/{chunk_key} "
+              f"({len(all_records)} records)")
+
+        # Per-ticker watermark update AFTER EACH CHUNK — partial-run
+        # recovery: if the job dies on chunk 40/78, tickers already
+        # watermarked through chunk 39 don't need to be re-fetched from
+        # scratch on retry.
+        for ticker, rows in per_ticker.items():
+            if rows:
+                ticker_rows_seen[ticker] += len(rows)
+                update_watermark(SOURCE, ticker, chunk_end, "success", len(rows))
+
+        # Explicitly drop chunk data before next iteration
+        del per_ticker, all_records
+
+        if i < len(chunks):  # skip delay after the final chunk
+            delay_seconds = 5
+            print(f"  Waiting {delay_seconds}s before next chunk "
+                  f"(rate-limit cooldown)...")
+            time.sleep(delay_seconds)
+
+    print(f"\n[{SOURCE}] Backfill complete. "
+          f"{sum(ticker_rows_seen.values())} total rows across "
+          f"{len(tickers)} tickers, {len(chunks)} chunks.")
 
 
 if __name__ == "__main__":

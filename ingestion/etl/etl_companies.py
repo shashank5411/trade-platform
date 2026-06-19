@@ -68,16 +68,24 @@ def load_sp500_tickers() -> set:
 
 
 def read_latest_raw() -> list:
-    """Read the most-recent bulk yfinance raw JSON from S3 (same pattern as etl_yfinance)."""
+    """
+    Read the metadata file from the most recent ingestion run.
+
+    Since the 2026-06-19 chunking fix, ingest_yfinance.py writes ticker
+    metadata to a SEPARATE file once per run (no _chunk suffix) — this
+    distinguishes it from the per-month OHLCV price-chunk files that
+    etl_yfinance.py reads instead.
+    """
     paginator = s3.get_paginator("list_objects_v2")
     keys = []
     for page in paginator.paginate(Bucket=RAW_BUCKET):
         keys.extend([o["Key"] for o in page.get("Contents", [])])
 
-    keys = [k for k in keys if k.startswith("year=")]
+    keys = [k for k in keys
+            if k.startswith("year=") and "_metadata_" in k]
     if not keys:
         raise FileNotFoundError(
-            f"No raw files found under year= prefix in s3://{RAW_BUCKET}"
+            f"No metadata files found under year= prefix in s3://{RAW_BUCKET}"
         )
 
     latest_key = sorted(keys)[-1]

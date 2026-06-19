@@ -78,6 +78,9 @@ class Trace:
             "inputs_preview": str(inputs)[:500],
             "result_preview": result[:1500],
             "was_dedup":      was_dedup,
+            # Full, untruncated result — in-memory only, for Reflexion's
+            # grounding check. Stripped out in flush() before the S3 write.
+            "result_full":    result,
         })
         if was_dedup:
             self.had_dedup_hits = True
@@ -97,13 +100,18 @@ class Trace:
         month     = now.strftime("%m")
         timestamp = now.isoformat()
 
+        tools_called_for_s3 = [
+            {k: v for k, v in tc.items() if k != "result_full"}
+            for tc in self.tools_called
+        ]
+
         record = {
             "trace_id":            self.trace_id,
             "session_id":          self.session_id,
             "agent":               self.agent,
             "question":            self.question,
             "iterations":          self.iterations,
-            "tools_called":        self.tools_called,
+            "tools_called":        tools_called_for_s3,
             "total_tokens":        self.input_tokens + self.output_tokens,
             "input_tokens":        self.input_tokens,
             "output_tokens":       self.output_tokens,
