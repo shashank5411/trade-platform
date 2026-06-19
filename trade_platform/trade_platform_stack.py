@@ -554,7 +554,7 @@ class TradePlatformStack(Stack):
                 },
                 glue_version="3.0",
                 max_capacity=0.0625,
-                timeout=30,
+                timeout=90,
                 description=f"[{env_name}] {source.upper()} raw → Parquet ETL",
             )
 
@@ -609,7 +609,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=15,
+            timeout=90,
             description=f"[{env_name}] yfinance raw → companies reference table",
         )
 
