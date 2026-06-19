@@ -7,10 +7,19 @@ Raw format: bulk file, flat list of OHLCV records
 
 Partition layout (Phase 9+):
   ticker= / year=
-  - ticker uses sanitized value (^GSPC→GSPC, CL=F→CL_F, BRK-B→BRK_B)
-  - original ticker value preserved in Parquet data column
+  - partition path uses SANITIZED ticker value (^GSPC→GSPC, CL=F→CL_F)
   - 16x cheaper single-ticker Athena queries vs previous year=/exchange= layout
   - exchange kept as data column only (not partition)
+
+Column naming (Phase 9+ fix):
+  - Parquet data column is named 'ticker_symbol', NOT 'ticker' — Athena
+    throws HIVE_INVALID_METADATA "duplicate columns" if a Parquet column
+    has the same name as a partition column. 'ticker' now exists ONLY as
+    the partition (sanitized value); 'ticker_symbol' carries the original,
+    unsanitized value (^GSPC, EURUSD=X, BRK-B) for display/identification.
+  - query/api.py SELECTs 'ticker_symbol AS ticker' to recover the original
+    symbol for display, while WHERE clauses filter on the partition
+    column 'ticker' using the sanitized value (see _ticker_partition()).
 
 Notes:
 - yfinance returns adjusted close as Close by default
@@ -80,7 +89,7 @@ def _safe_partition_value(value: str) -> str:
     """
     Sanitize values for S3 partition paths.
     Hive/Athena breaks on ^, =, special chars in partition paths.
-    Real value is preserved in Parquet data column.
+    Original value is preserved in the 'ticker_symbol' Parquet column.
     ^GSPC → GSPC, CL=F → CL_F, BRK-B → BRK_B, DX-Y.NYB → DX_Y_NYB
     """
     return (value
@@ -135,13 +144,11 @@ def _run_timestamp(key: str) -> str:
     Filename format: yfinance_{start_date}_{end_date}_{TIMESTAMP}.json
     e.g. yfinance_2023-01-01_2026-06-19_20260619T003428Z.json → 20260619T003428Z
 
-    BUG THIS FIXES: sorting on the full key string is wrong because the
-    filename also embeds the requested date RANGE before the timestamp.
-    A narrow recent-window run (e.g. start=2026-05-19) sorts AFTER a full
-    history backfill (start=2023-01-01) purely on string comparison of
-    "2026-05-19" > "2023-01-01" — even when the full-history run is the
-    more recent one by actual wall-clock time. Sorting on just the
-    trailing timestamp avoids this entirely.
+    Sorting on the full key string is wrong because the filename also
+    embeds the requested date RANGE before the timestamp. A narrow
+    recent-window run (start=2026-05-19) can sort after a full history
+    backfill (start=2023-01-01) purely on string comparison. Sorting on
+    just the trailing timestamp avoids this.
     """
     filename = key.rsplit("/", 1)[-1]
     return filename.rsplit("_", 1)[-1].replace(".json", "")
@@ -161,7 +168,6 @@ def read_latest_raw() -> list:
         )
 
     # Sort by embedded run timestamp, NOT the full key string.
-    # See _run_timestamp() docstring for why this matters.
     latest_key = max(keys, key=_run_timestamp)
     print(f"  Reading s3://{RAW_BUCKET}/{latest_key}")
 
@@ -179,11 +185,12 @@ def write_processed(rows: list) -> int:
     Write canonical rows to processed bucket as Parquet.
 
     Partition layout: ticker= / year=
-    - ticker partition uses sanitized value (_safe_partition_value)
-    - year and ticker are partition columns — excluded from Parquet file
-      to avoid HIVE_INVALID_METADATA duplicate column error in Athena
-    - original ticker value preserved in Parquet as 'ticker' column
-    - exchange kept as data column only
+    - partition path value is sanitized (_safe_partition_value)
+    - year and ticker (sanitized) are partition columns — excluded from
+      the Parquet file to avoid HIVE_INVALID_METADATA duplicate columns
+    - rows carry 'ticker_symbol' (original value) and '_partition_ticker'
+      (sanitized, used only for grouping) — '_partition_ticker' is also
+      dropped before writing Parquet
     """
     if not rows:
         print("  No rows to write")
@@ -193,20 +200,20 @@ def write_processed(rows: list) -> int:
     df["year"] = df["year"].astype(int)
     total = 0
 
-    for (ticker, year), group in df.groupby(["ticker", "year"]):
-        safe_ticker = _safe_partition_value(ticker)
+    for (partition_ticker, year), group in df.groupby(["_partition_ticker", "year"]):
         key = (
             f"market_prices/"
-            f"ticker={safe_ticker}/"
+            f"ticker={partition_ticker}/"
             f"year={year}/"
             f"data.parquet"
         )
 
         buf = BytesIO()
-        # Drop partition columns from Parquet — Athena infers them from path
-        # Original ticker value is still present in the 'ticker' data column
-        write_df = group.drop(columns=["year"])
-        # ticker column keeps original value (^GSPC, EURUSD=X) for queries
+        # Drop both partition columns from Parquet — Athena infers them
+        # from the S3 path. 'ticker_symbol' (original value) stays as a
+        # regular data column — it does NOT collide with the 'ticker'
+        # partition column name.
+        write_df = group.drop(columns=["year", "_partition_ticker"])
         write_df.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
         buf.seek(0)
         s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.getvalue())
@@ -228,6 +235,10 @@ def transform(records: list, config: dict) -> list:
       get the same value, flagged in metadata
     - Capitalized field names lowercased
     - Exchange/country/currency inferred from ticker
+    - 'ticker_symbol' carries the original value (^GSPC, BRK-B, etc.) as a
+      Parquet data column. '_partition_ticker' carries the sanitized value
+      used ONLY to build the S3 partition path in write_processed() — it
+      is dropped before writing and never appears in the Parquet schema.
     """
     ingested_at    = now_utc()
     rows           = []
@@ -271,7 +282,8 @@ def transform(records: list, config: dict) -> list:
         adj_close = safe_float(rec.get("Close"))
 
         row = {
-            "ticker":      ticker,
+            "ticker_symbol":     ticker,                          # data column — original value
+            "_partition_ticker": _safe_partition_value(ticker),   # dropped before write — partition path only
             "exchange":    exchange,   # data column only — not a partition
             "date":        str(trade_date),
             "year":        trade_date.year,   # partition column — dropped from Parquet
@@ -295,7 +307,13 @@ def transform(records: list, config: dict) -> list:
             "ingested_at": ingested_at,
         }
 
-        errors = validate_market_price_row(row)
+        # validate_market_price_row() (shared utility, used by all 5 ETL
+        # scripts) requires a 'ticker' key — not touching its contract.
+        # Pass a shallow copy with 'ticker' aliased back in for validation
+        # only; the row actually appended below has no 'ticker' key, just
+        # 'ticker_symbol' (data column) and '_partition_ticker' (path only).
+        validation_row = dict(row, ticker=ticker)
+        errors = validate_market_price_row(validation_row)
         if errors:
             print(f"  WARN: skipping {ticker}/{trade_date}: {errors}")
             continue

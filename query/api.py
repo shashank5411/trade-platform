@@ -222,12 +222,15 @@ def get_prices(
     sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
     industry_filter = f"AND industry = '{industry}'" if industry  else ""
 
+    # 'ticker' is a partition column (sanitized value) — pruning happens
+    # via {tp}. The original symbol lives in the 'ticker_symbol' data
+    # column, recovered here via SELECT alias for display/downstream code.
     if granularity == "daily":
         sql = f"""
-            SELECT ticker, date, open, high, low,
+            SELECT ticker_symbol AS ticker, date, open, high, low,
                    close, adj_close, volume
             FROM   market_prices
-            WHERE  ticker = '{ticker}'
+            WHERE  1=1
               {tp} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
@@ -235,7 +238,7 @@ def get_prices(
         """
     elif granularity == "weekly":
         sql = f"""
-            SELECT ticker,
+            SELECT ticker_symbol AS ticker,
                    DATE_TRUNC('week', CAST(date AS DATE)) AS date,
                    MIN(low)            AS low,
                    MAX(high)           AS high,
@@ -244,17 +247,17 @@ def get_prices(
                    AVG(adj_close)      AS avg_close,
                    SUM(volume)         AS volume
             FROM   market_prices
-            WHERE  ticker = '{ticker}'
+            WHERE  1=1
               {tp} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
-            GROUP BY ticker,
+            GROUP BY ticker_symbol,
                      DATE_TRUNC('week', CAST(date AS DATE))
             ORDER BY date ASC
         """
     else:  # monthly
         sql = f"""
-            SELECT ticker,
+            SELECT ticker_symbol AS ticker,
                    DATE_TRUNC('month', CAST(date AS DATE)) AS date,
                    MIN(low)            AS low,
                    MAX(high)           AS high,
@@ -263,11 +266,11 @@ def get_prices(
                    AVG(adj_close)      AS avg_close,
                    SUM(volume)         AS volume
             FROM   market_prices
-            WHERE  ticker = '{ticker}'
+            WHERE  1=1
               {tp} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
-            GROUP BY ticker,
+            GROUP BY ticker_symbol,
                      DATE_TRUNC('month', CAST(date AS DATE))
             ORDER BY date ASC
         """
@@ -296,20 +299,25 @@ def get_prices_multi(
     sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
     industry_filter = f"AND industry = '{industry}'" if industry  else ""
 
+    # 'ticker' is a partition column (sanitized values) — pruning happens
+    # via {tps}. Original symbols live in 'ticker_symbol', recovered via
+    # SELECT alias. ORDER/GROUP BY must use ticker_symbol — it's the real
+    # data column; 'ticker' the partition can't be referenced post-SELECT
+    # the same way in all engines, so be explicit and consistent.
     if granularity == "daily":
         sql = f"""
-            SELECT ticker, date, open, high, low,
+            SELECT ticker_symbol AS ticker, date, open, high, low,
                    close, adj_close, volume
             FROM   market_prices
-            WHERE  ticker IN ('{ticker_list}')
+            WHERE  1=1
               {tps} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
-            ORDER BY ticker ASC, date ASC
+            ORDER BY ticker_symbol ASC, date ASC
         """
     elif granularity == "weekly":
         sql = f"""
-            SELECT ticker,
+            SELECT ticker_symbol AS ticker,
                    DATE_TRUNC('week', CAST(date AS DATE)) AS date,
                    MIN(low)            AS low,
                    MAX(high)           AS high,
@@ -318,17 +326,17 @@ def get_prices_multi(
                    AVG(adj_close)      AS avg_close,
                    SUM(volume)         AS volume
             FROM   market_prices
-            WHERE  ticker IN ('{ticker_list}')
+            WHERE  1=1
               {tps} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
-            GROUP BY ticker,
+            GROUP BY ticker_symbol,
                      DATE_TRUNC('week', CAST(date AS DATE))
-            ORDER BY ticker ASC, date ASC
+            ORDER BY ticker_symbol ASC, date ASC
         """
     else:  # monthly
         sql = f"""
-            SELECT ticker,
+            SELECT ticker_symbol AS ticker,
                    DATE_TRUNC('month', CAST(date AS DATE)) AS date,
                    MIN(low)            AS low,
                    MAX(high)           AS high,
@@ -337,13 +345,13 @@ def get_prices_multi(
                    AVG(adj_close)      AS avg_close,
                    SUM(volume)         AS volume
             FROM   market_prices
-            WHERE  ticker IN ('{ticker_list}')
+            WHERE  1=1
               {tps} {yf} {ex_filter}
               {sector_filter} {industry_filter}
               AND date BETWEEN '{start}' AND '{end}'
-            GROUP BY ticker,
+            GROUP BY ticker_symbol,
                      DATE_TRUNC('month', CAST(date AS DATE))
-            ORDER BY ticker ASC, date ASC
+            ORDER BY ticker_symbol ASC, date ASC
         """
 
     try:
@@ -376,7 +384,7 @@ def get_prices_by_sector(
     industry_filter = f"AND industry = '{industry}'" if industry else ""
 
     sql = f"""
-        SELECT ticker, sector, industry,
+        SELECT ticker_symbol AS ticker, sector, industry,
                MIN_BY(close, date)  AS start_close,
                MAX_BY(close, date)  AS end_close,
                AVG(close)           AS avg_close,
@@ -387,7 +395,7 @@ def get_prices_by_sector(
           {industry_filter}
           {yf}
           AND date BETWEEN '{start}' AND '{end}'
-        GROUP BY ticker, sector, industry
+        GROUP BY ticker_symbol, sector, industry
         ORDER BY pct_change DESC
         LIMIT  20
     """
@@ -417,10 +425,10 @@ def get_price_on_date(
     ex_filter = f"AND exchange = '{exchange}'" if exchange else ""
 
     sql = f"""
-        SELECT ticker, exchange, date, currency,
+        SELECT ticker_symbol AS ticker, exchange, date, currency,
                open, high, low, close, adj_close, volume
         FROM   market_prices
-        WHERE  ticker = '{ticker}'
+        WHERE  1=1
           {tp}
           AND  CAST(year AS INTEGER) = {as_of_yr}
           AND  date <= '{date_str}'
@@ -461,22 +469,22 @@ def get_prices_on_date(
     ex_filter   = f"AND exchange = '{exchange}'" if exchange else ""
 
     sql = f"""
-        SELECT ticker, date, close, adj_close, volume, currency
+        SELECT ticker_symbol AS ticker, date, close, adj_close, volume, currency
         FROM (
-            SELECT ticker, date, close, adj_close, volume, currency,
+            SELECT ticker_symbol, date, close, adj_close, volume, currency,
                    ROW_NUMBER() OVER (
-                       PARTITION BY ticker
+                       PARTITION BY ticker_symbol
                        ORDER BY date DESC
                    ) AS rn
             FROM   market_prices
-            WHERE  ticker IN ('{ticker_list}')
+            WHERE  1=1
               {tps}
               AND  CAST(year AS INTEGER) = {as_of_yr}
               AND  date <= '{date_str}'
               {ex_filter}
         )
         WHERE rn = 1
-        ORDER BY ticker ASC
+        ORDER BY ticker_symbol ASC
     """
     try:
         df = query(sql, DB["yfinance"])
