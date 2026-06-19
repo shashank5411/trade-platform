@@ -95,10 +95,42 @@ UNIT_MAP = {
     "UMCSENT":  "index_1966_100",
     "HOUST":    "thousands_of_units",
     "INDPRO":   "index_2017_100",
+    # Added — dollar / FX
+    "DTWEXBGS": "index",
+    "DEXUSEU":  "usd_per_eur",
+    "DEXJPUS":  "jpy_per_usd",
+    "DEXUSUK":  "usd_per_gbp",
+    "DEXINUS":  "inr_per_usd",
+    "DEXCHUS":  "cny_per_usd",
+    # Added — commodities
+    "GOLDAMGBD228NLBM": "usd_per_troy_oz",
+    "DCOILWTICO":       "usd_per_barrel",
+    # Added — credit / spreads
+    "BAMLH0A0HYM2": "percent",
 }
 DEFAULT_UNIT = "units"
 
+# Explicit series_id -> frequency overrides. Always checked first, before
+# any fuzzy label-substring matching. Add every new series here when it's
+# added to fred.yaml — do not rely on label substrings for known series.
+SERIES_FREQUENCY_OVERRIDE = {
+    "DGS10": "daily",
+    "DGS2": "daily",
+    "DTWEXBGS": "daily",
+    "DEXUSEU": "daily",
+    "DEXJPUS": "daily",
+    "DEXUSUK": "daily",
+    "DEXINUS": "daily",
+    "DEXCHUS": "daily",
+    "GOLDAMGBD228NLBM": "daily",
+    "DCOILWTICO": "daily",
+    "BAMLH0A0HYM2": "daily",
+    "T10Y2Y": "daily",
+}
+
 def infer_frequency(series_id: str, label: str) -> str:
+    if series_id in SERIES_FREQUENCY_OVERRIDE:
+        return SERIES_FREQUENCY_OVERRIDE[series_id]
     combined = f"{series_id} {label}".lower()
     for hint, freq in FREQ_HINTS.items():
         if hint in combined:
