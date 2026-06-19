@@ -418,6 +418,11 @@ class TradePlatformStack(Stack):
             ),
         }
 
+        TIMEOUT_OVERRIDE = {
+           "yfinance": 60,  # 479 S&P 500 tickers — yf.Ticker().info per-ticker
+                     # metadata calls add up beyond the default 30 min
+        }
+
         JOB_SCHEDULES = {
             "yfinance":  "cron(0 21 ? * MON-FRI *)",   # weekdays after US close
             "fred":      "cron(0 6 1 * ? *)",            # 1st of each month
@@ -453,7 +458,7 @@ class TradePlatformStack(Stack):
                 },
                 glue_version="3.0",
                 max_capacity=0.0625,
-                timeout=30,
+                timeout=TIMEOUT_OVERRIDE.get(source, 30),
                 description=f"[{env_name}] {source.upper()} data ingestion",
             )
 
