@@ -17,6 +17,12 @@ tickers:
   - JPM
   - BAC
   - XOM
+  - JNJ
+  - WMT
+  - CAT
+  - PG
+  - KO
+  - DIS
 
 # Transaction types to capture
 # Table I only (non-derivative) — skip Table II (options/derivatives)

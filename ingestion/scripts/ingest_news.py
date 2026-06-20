@@ -25,6 +25,8 @@ import urllib.error
 import time
 import boto3
 
+from utils.config import load_source_config
+
 # ── Fix B: _arg function ──────────────────────────────────────────────────────
 def _arg(name: str, default: str = "") -> str:
     for i, a in enumerate(sys.argv):
@@ -53,33 +55,25 @@ def _arg_parser():
 args         = _arg_parser()
 BACKFILL_DAYS = args.backfill_days or (90 if ENV == "dev" else 90)
 
-# Tickers to track — 7 dev companies + 4 ETF proxies
-TICKERS = [
-    # Dev companies
-    "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "BAC", "XOM",
-    # ETF proxies
-    "GLD", "USO", "TLT", "SPY",
-]
+def _build_publisher_tier_map(config: dict) -> dict:
+    """Flatten news.yaml's tier_1/tier_2/tier_3 lists into a single
+    {lowercased_name: tier_int} lookup dict, matching the shape
+    get_publisher_tier() already expects."""
+    tier_map = {}
+    publisher_tiers = config.get("publisher_tiers", {})
+    for tier_key, names in publisher_tiers.items():
+        # tier_key looks like "tier_1", "tier_2", "tier_3"
+        try:
+            tier_num = int(tier_key.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        for name in names:
+            tier_map[name.lower()] = tier_num
+    return tier_map
 
-# Publisher tier mapping
-PUBLISHER_TIERS = {
-    # Tier 1 — wire services / premium financial press
-    "reuters":          1, "associated press": 1, "ap":               1,
-    "bloomberg":        1, "financial times":  1, "wall street journal": 1,
-    "wsj":              1, "dow jones":        1,
-    # Tier 2 — established financial media
-    "marketwatch":      2, "benzinga":         2, "barron's":         2,
-    "cnbc":             2, "yahoo finance":    2, "investopedia":     2,
-    "the street":       2, "thestreet":        2, "zacks":            2,
-    "morningstar":      2,
-    # Tier 3 — opinion / retail-focused
-    "seeking alpha":    3, "the motley fool":  3, "motley fool":      3,
-    "fool.com":         3, "gurufocus":        3, "stockanalysis":    3,
-}
-
-def get_publisher_tier(publisher_name: str) -> int:
+def get_publisher_tier(publisher_name: str, tier_map: dict) -> int:
     name = publisher_name.lower().strip()
-    for key, tier in PUBLISHER_TIERS.items():
+    for key, tier in tier_map.items():
         if key in name:
             return tier
     return 3  # default to tier 3 for unknown publishers
@@ -209,7 +203,7 @@ def fetch_ticker_news(
     return articles
 
 # ── Process raw article → clean dict ─────────────────────────────────────────
-def process_article(raw: dict, primary_ticker: str) -> dict:
+def process_article(raw: dict, primary_ticker: str, tier_map: dict) -> dict:
     publisher_name = raw.get("publisher", {}).get("name", "Unknown")
 
     # Extract per-ticker sentiment from insights array
@@ -241,7 +235,7 @@ def process_article(raw: dict, primary_ticker: str) -> dict:
         "author":               raw.get("author", ""),
         "published_at":         published_utc,
         "publisher":            publisher_name,
-        "publisher_tier":       get_publisher_tier(publisher_name),
+        "publisher_tier":       get_publisher_tier(publisher_name, tier_map),
         "primary_ticker":       primary_ticker,
         "tickers":              json.dumps(raw.get("tickers", [])),
         "sentiment":            sentiment,
@@ -255,8 +249,12 @@ def process_article(raw: dict, primary_ticker: str) -> dict:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    config   = load_source_config("news")
+    tickers  = config.get("tickers", [])
+    tier_map = _build_publisher_tier_map(config)
+
     print(f"[ingest_news] env={ENV}, bucket={RAW_BUCKET}")
-    print(f"  Tickers: {TICKERS}")
+    print(f"  Tickers ({len(tickers)}): {tickers}")
     print(f"  Backfill days: {BACKFILL_DAYS}")
 
     api_key = get_api_key()
@@ -272,7 +270,7 @@ def main():
 
     print(f"  Date range: {published_gte} → {published_lte}")
 
-    for ticker in TICKERS:
+    for ticker in tickers:
         print(f"\n── {ticker} ──")
         time.sleep(12)  # rate limit between tickers
 
@@ -291,7 +289,7 @@ def main():
             if dedup_key in ingested:
                 continue
 
-            processed = process_article(raw, ticker)
+            processed = process_article(raw, ticker, tier_map)
             new_articles.append(processed)
             new_ids.add(dedup_key)
 

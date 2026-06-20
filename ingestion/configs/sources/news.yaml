@@ -22,6 +22,12 @@ tickers:
   - JPM
   - BAC
   - XOM
+  - JNJ
+  - WMT
+  - CAT
+  - PG
+  - KO
+  - DIS
   # ETF proxies — for commodity/bond/market-level news
   - GLD    # Gold
   - USO    # Oil

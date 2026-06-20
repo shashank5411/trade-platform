@@ -27,6 +27,8 @@ import xml.etree.ElementTree as ET
 
 import boto3
 
+from utils.config import get_default_start, load_source_config
+
 # ── Fix B: _arg function ──────────────────────────────────────────────────────
 def _arg(name: str, default: str = "") -> str:
     for i, a in enumerate(sys.argv):
@@ -64,6 +66,12 @@ TICKER_CIKS = {
     "JPM":   "0000019617",
     "BAC":   "0000070858",
     "XOM":   "0000034088",
+    "JNJ":   "0000200406",
+    "WMT":   "0000104169",
+    "CAT":   "0000018230",
+    "PG":    "0000080424",
+    "KO":    "0000021344",
+    "DIS":   "0001744489",
 }
 
 # ── Fix C: parse_known_args ───────────────────────────────────────────────────
@@ -76,7 +84,8 @@ def _arg_parser():
     return p.parse_known_args()[0]
 
 args        = _arg_parser()
-START_DATE  = args.start_date or ("2020-01-01" if ENV == "dev" else "2000-01-01")
+_config     = load_source_config("insiders")
+START_DATE  = args.start_date or get_default_start(_config)
 start_dt    = datetime.date.fromisoformat(START_DATE)
 ONLY_TICKER = args.ticker
 
@@ -352,9 +361,24 @@ def upload_filing(ticker: str, accession: str, transactions: list) -> None:
 def main():
     print(f"[ingest_insiders] env={ENV}, start={START_DATE}, bucket={RAW_BUCKET}")
 
-    tickers = {ONLY_TICKER: TICKER_CIKS[ONLY_TICKER]} \
-              if ONLY_TICKER and ONLY_TICKER in TICKER_CIKS \
-              else TICKER_CIKS
+    configured_tickers = _config.get("tickers", [])
+
+    if ONLY_TICKER:
+        if ONLY_TICKER not in TICKER_CIKS:
+            print(f"ERROR: {ONLY_TICKER} has no CIK mapping in "
+                  f"TICKER_CIKS — add it before using --ticker")
+            return
+        tickers = {ONLY_TICKER: TICKER_CIKS[ONLY_TICKER]}
+    else:
+        tickers = {}
+        for t in configured_tickers:
+            if t not in TICKER_CIKS:
+                print(f"WARN: {t} in insiders.yaml has no CIK mapping "
+                      f"in TICKER_CIKS — skipping")
+                continue
+            tickers[t] = TICKER_CIKS[t]
+
+    print(f"  Resolved tickers ({len(tickers)}): {sorted(tickers.keys())}")
 
     total_txns    = 0
     total_filings = 0

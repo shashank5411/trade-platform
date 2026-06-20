@@ -1,12 +1,12 @@
 default_start_date:
-  dev: "2020-01-01"
+  dev: "2023-01-01"
   prod: "2000-01-01"
 frequency: quarterly
 max_lookback_days: 90
 
 # sec.yaml
 prose_lookback:
-  dev:  1    # last year only — ~5 filings per company
+  dev:  3   # last year only — ~5 filings per company
   prod: 5    # last 5 years — ~25 filings per company
 
 # sec.yaml
