@@ -917,7 +917,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=30,
+            timeout=150,
             description=f"[{env_name}] FedSpeak ingestion — FOMC calendar + speeches RSS",
         )
 
@@ -944,7 +944,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=30,
+            timeout=150,
             description=f"[{env_name}] FedSpeak raw JSON → Parquet ETL",
         )
 
