@@ -2,13 +2,13 @@
 # Polygon/Massive news ingestion config
 
 default_start_date:
-  dev:  "2026-03-15"   # 90-day backfill from first run
+  dev:  "2023-01-01"   # 90-day backfill from first run
   prod: "2024-01-01"
 
 frequency: weekly      # runs every Monday
 
 backfill_days:
-  dev:  90
+  dev:  1400
   prod: 90             # initial backfill only; incremental after
 
 # Tickers to fetch news for
