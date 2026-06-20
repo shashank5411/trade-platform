@@ -13,16 +13,22 @@ prose_lookback:
 prose_cutoff:
   dev:
     10-K: 2023-01-01    # last ~2 annual reports
-    10-Q: 2025-01-01    # last ~4 quarterly reports
+    10-Q: 2023-01-01    # last ~4 quarterly reports
   prod:
     10-K: 2019-01-01    # last 5 annual reports  
     10-Q: 2023-01-01    # last ~8 quarterly reports
     
 companies:
-  AAPL:  "0000320193"
-  MSFT:  "0000789019"
+  AAPL: "0000320193"
+  MSFT: "0000789019"
   GOOGL: "0001652044"
-  AMZN:  "0001018724"
-  JPM:   "0000019617"
-  BAC:   "0000070858"
-  XOM:   "0000034088"
+  AMZN: "0001018724"
+  JPM: "0000019617"
+  BAC: "0000070858"
+  XOM: "0000034088"
+  JNJ: "0000200406"
+  WMT: "0000104169"
+  CAT: "0000018230"
+  PG: "0000080424"
+  KO: "0000021344"
+  DIS: "0001744489"

@@ -1,10 +1,12 @@
 # Trade Platform — Project Overview
 
-**Purpose:** A global economic intelligence platform on AWS. Ingests market data, macro indicators, SEC filings, and reference documents on automated schedules; exposes them through an Athena-backed query layer driven by a multi-agent Claude-powered system with conversation memory and semantic search.
+**Purpose:** A global economic intelligence platform on AWS. Ingests market data, macro indicators, SEC filings, Fed communications, news sentiment, and insider trades on automated schedules; exposes them through an Athena-backed query layer driven by a multi-agent Claude-powered system with conversation memory, semantic search, and self-critique guardrails.
 
 **Stack:** Python · AWS CDK (Python) · AWS Glue (Python Shell) · S3 · Athena · DynamoDB · Secrets Manager · S3 Vectors (Cohere Embed v3) · Anthropic SDK
 
 **Region:** `us-east-2`  |  **Dev account:** `197411402303`  |  **Env prefix:** `dev` / `prod`
+
+> This doc is a factual current-state reference for coding work, not a design-decision log. Architecture/reasoning discussion happens elsewhere — keep edits here limited to "what exists and where," not "what should we do."
 
 ---
 
@@ -14,47 +16,55 @@
 trade-platform/
 ├── app.py                              # CDK entry point
 ├── cdk.json
-├── athena_config.json                  # Athena results bucket (dev)
-├── requirements.txt                    # CDK deps
+├── verify_pipeline.py                  # CLI: per-source pipeline health check + reset
 ├── trade_platform/
-│   └── trade_platform_stack.py         # All infrastructure in one CDK stack
+│   └── trade_platform_stack.py         # All infrastructure in one CDK stack (~1200 lines)
 ├── ingestion/
-│   ├── configs/sources/                # One YAML per data source
-│   ├── etl/                            # ETL scripts: raw JSON → canonical Parquet
-│   │   ├── __init__.py
-│   │   ├── etl_yfinance.py
-│   │   ├── etl_fred.py
-│   │   ├── etl_sec.py
-│   │   ├── etl_wikipedia.py
-│   │   ├── etl_worldbank.py
-│   │   └── etl_embed.py                # Phase 5 — documents → S3 Vectors
-│   ├── scripts/                        # Glue job entry points
-│   │   ├── ingest_yfinance.py
-│   │   ├── ingest_fred.py
-│   │   ├── ingest_sec.py
+│   ├── configs/sources/                # One YAML per data source (14 total)
+│   ├── etl/                            # Raw JSON → canonical Parquet
+│   │   ├── etl_yfinance.py             # market_prices (ticker=/year= partitions)
+│   │   ├── etl_companies.py            # companies reference table (full-refresh)
+│   │   ├── etl_fred.py                 # economic_indicators (FRED)
+│   │   ├── etl_worldbank.py            # economic_indicators (WorldBank)
+│   │   ├── etl_sec.py                  # documents (10-K/10-Q raw text)
+│   │   ├── etl_sec_prose.py            # documents_prose (section-level extraction)
+│   │   ├── etl_wikipedia.py            # documents (wiki articles)
+│   │   ├── etl_fedspeak.py             # documents (source=FEDSPEAK)
+│   │   ├── etl_news.py                 # news (Polygon, per-article sentiment)
+│   │   ├── etl_insiders.py             # insider_trades (SEC Form 4)
+│   │   └── etl_embed.py                # documents/documents_prose → S3 Vectors
+│   ├── scripts/                        # Glue job entry points (ingestion)
+│   │   ├── ingest_yfinance.py          # chunked: month-chunks + separate metadata file
+│   │   ├── ingest_fred.py / ingest_worldbank.py
+│   │   ├── ingest_sec.py               # EDGAR, paginated
 │   │   ├── ingest_wikipedia.py
-│   │   └── ingest_worldbank.py
+│   │   ├── ingest_fedspeak.py          # FOMC statements/minutes/transcripts/speeches
+│   │   ├── ingest_news.py              # Polygon News API
+│   │   ├── ingest_insiders.py          # SEC Form 4 XML
+│   │   └── ingest_{acled,comtrade,eia,imf,unctad,wto}.py   # written, NOT wired (no ETL/CDK)
 │   ├── utils/
-│   │   ├── config.py                   # load_source_config() — parses YAML
-│   │   ├── watermark.py                # DynamoDB incremental-ingestion tracking
-│   │   ├── transform.py                # Row validation, safe_float, to_json_str
-│   │   ├── dates.py                    # Date arithmetic
-│   │   └── periods.py                  # Year/month period helpers
+│   │   ├── config.py                   # load_source_config(), get_default_start()
+│   │   ├── watermark.py                # DynamoDB watermarks + SEC S3-tracker helpers
+│   │   ├── transform.py                # safe_float, to_json_str, row validators
+│   │   ├── dates.py                    # current_date_str, subtract_days, resolve_dates
+│   │   └── periods.py
 │   └── requirements.txt
 ├── query/
-│   ├── __init__.py                     # re-exports run_question as run
 │   ├── agent.py                        # CLI entry point — memory + orchestrator
-│   ├── orchestrator.py                 # Thin wrapper: plan → execute
+│   ├── orchestrator.py                 # plan() → execute(), sync wrapper around async
 │   ├── planner.py                      # LLM DAG planner (Haiku dev / Sonnet prod)
-│   ├── dag_executor.py                 # Async parallel round executor
-│   ├── sub_agents.py                   # MarketAgent, MacroAgent, FilingsAgent
-│   ├── registry.py                     # Agent registry — single source of truth
+│   ├── dag_executor.py                 # asyncio parallel-round executor + synthesis
+│   ├── sub_agents.py                   # MarketAgent, MacroAgent, FilingsAgent, SentimentAgent
+│   ├── registry.py                     # AGENT_REGISTRY — single source of truth
 │   ├── memory.py                       # DynamoDB-backed session memory
-│   ├── api.py                          # 10 tool implementations + semantic_search
-│   ├── tools.py                        # Anthropic tool schemas + registry
-│   └── athena.py                       # Athena client wrapper
+│   ├── api.py                          # 17 tool implementations
+│   ├── tools.py                        # Anthropic tool schemas + get_registry()
+│   ├── telemetry.py                    # Trace class — S3 JSON traces for Athena
+│   ├── reflexion.py                    # critique() + apply_reflexion() self-check loop
+│   ├── athena.py                       # Athena client wrapper (query(), error types)
+│   └── config.py                       # get_client() — Anthropic client singleton
 └── scripts/
-    └── bootstrap_sp500.py              # One-shot: Wikipedia → EDGAR CIK mapping
+    └── bootstrap_sp500.py               # One-shot: Wikipedia → EDGAR CIK mapping
 ```
 
 ---
@@ -62,63 +72,55 @@ trade-platform/
 ## Architecture
 
 ```
-External APIs
-(yfinance, FRED, SEC EDGAR, World Bank, Wikipedia, …)
+External APIs (yfinance, FRED, SEC EDGAR, World Bank, Wikipedia, Fed/FOMC, Polygon News)
         │
         ▼
-Glue Python Shell Jobs   ←─ Scheduled triggers (see table below)
+Glue Python Shell Jobs   ←─ Scheduled + CONDITIONAL chain triggers
 (ingestion/scripts/)
-        │  raw JSON/CSV, partitioned year=
+        │  raw JSON, partitioned year=  (yfinance: month-chunked + separate metadata file)
         ▼
 S3 Raw Buckets           {env}-trade-{source}-raw-{account}
         │
-        ├──► Glue Crawler (2 AM UTC daily) → Raw Athena tables
-        │
+        ├──► Glue Crawler → Raw Athena tables
         ▼
 ETL Jobs (ingestion/etl/)
-        │  canonical Parquet, partitioned by schema
+        │  canonical Parquet
         ▼
 S3 Processed Buckets     {env}-trade-{source}-processed-{account}
         │
-        ├──► Glue Crawler (2 AM UTC daily) → Processed Athena tables
-        │
-        ├──► etl_embed.py ──► Bedrock Cohere Embed v3
-        │                            │  float32 vectors, 1024 dim
-        │                            ▼
-        │                   S3 Vectors: documents-index (cosine)
-        │
+        ├──► Glue Crawler → Processed Athena tables (bucket-root targets — auto-discovers new tables)
+        ├──► etl_embed.py ──► Bedrock Cohere Embed v3 ──► S3 Vectors: documents-index
         ▼
 Athena (query/athena.py)        S3 Vectors (query/api.py)
         │                              │
         └──────────────┬───────────────┘
                        ▼
-              Query API (query/api.py)
-              10 tools: prices, indicators, documents, semantic_search
-                       │
+              Query API — 17 tools (query/api.py + tools.py)
                        ▼
-              Orchestrator (query/orchestrator.py)
-              plan() → execute()
+              Orchestrator (query/orchestrator.py)  →  plan() → execute()
                        │
               ┌────────▼────────┐
               │  DAG Planner    │  Haiku (dev) / Sonnet (prod)
-              │  (planner.py)   │  produces JSON DAG with depends_on
+              │  (planner.py)   │  JSON DAG + IMPLICIT DATE RESOLUTION rules
               └────────┬────────┘
                        │
-              ┌────────▼────────────────────────┐
-              │  DAG Executor (dag_executor.py)  │
-              │  asyncio — parallel rounds       │
-              │                                  │
-              │  Round 1: [macro] ──────────────►│
-              │  Round 2: [market] [filings] ───►│  (parallel)
-              └────────┬────────────────────────┘
+              ┌────────▼─────────────────────────────────────┐
+              │  DAG Executor (dag_executor.py) — asyncio     │
+              │  Parallel agents get a role-scoping hint      │
+              │  injected so they don't ask for clarification │
+              │  about another agent's domain                 │
+              │                                                │
+              │  market | macro | filings | sentiment          │
+              └────────┬─────────────────────────────────────┘
                        │  per-agent answers
                        ▼
-              Synthesis (Haiku/Sonnet)
-                       │
+              Synthesis (Haiku/Sonnet) — SYNTHESIS_SYSTEM tells it to
+              note gaps in one sentence, never block on missing data
                        ▼
-              DynamoDB Memory (query/memory.py)
-              session_id + timestamp, TTL 30d
-                       │
+              Reflexion critic pass per agent (query/reflexion.py)
+              sees FULL tool results (not the 1500-char S3 preview)
+                       ▼
+              DynamoDB Memory (query/memory.py) — TTL 30d
                        ▼
               User: grounded natural-language answer
 ```
@@ -129,256 +131,255 @@ Athena (query/athena.py)        S3 Vectors (query/api.py)
 
 ### S3 Buckets
 
-Two layers × five sources = **10 buckets**, plus one vectors bucket. All versioned, SSE-S3, SSL-enforced, `RETAIN` on destroy.
+Standard loop sources (`SOURCES = ["yfinance", "fred", "worldbank", "sec", "wikipedia"]`) get raw+processed buckets via a loop. `fedspeak`, `news`, `insiders`, `sec_prose` are wired individually (own buckets/DB/crawler/jobs, not part of the `SOURCES` loop). All buckets versioned, SSE-S3, SSL-enforced, `RETAIN` on destroy.
 
 | Bucket pattern                             | Layer     |
 |--------------------------------------------|-----------|
 | `{env}-trade-{source}-raw-{account}`       | Raw       |
 | `{env}-trade-{source}-processed-{account}` | Processed |
 | `{env}-trade-vectors-{account}`            | Vectors   |
+| `{env}-trade-llmops-{account}`             | Telemetry traces |
 
-Sources: `yfinance`, `fred`, `worldbank`, `sec`, `wikipedia`
+The `companies` table has **no separate bucket** — it lives at `s3://{env}-trade-yfinance-processed-{account}/companies/data.parquet`, inside the existing yfinance processed bucket/DB.
 
 ### Glue Catalog
 
-One database per source per layer: `{env}_trade_{source}_{layer}`  
-e.g. `dev_trade_fred_processed`
+One database per source per layer: `{env}_trade_{source}_{layer}`, e.g. `dev_trade_fred_processed`. `companies` is a table inside `dev_trade_yfinance_processed`, not its own DB.
 
 ### Glue Crawlers
 
-10 crawlers (raw + processed × 5 sources). All run on `cron(0 2 * * ? *)` (2 AM UTC).  
-Schema change policy: LOG. Recrawl: CRAWL_EVERYTHING.
+Standard 5 sources (`PROCESSED_PATHS` dict in stack) target **bucket root** for the processed layer (`""`, not a subfolder) — this lets a crawler auto-discover new tables (e.g. `companies/`) without a CDK update. Raw layer still targets `year=` prefix per source. All run `cron(0 2 * * ? *)`, schema change LOG, recrawl CRAWL_EVERYTHING.
+
+Separately-wired crawlers (own CfnCrawler blocks, NOT affected by `PROCESSED_PATHS`): `sec_prose`, `fedspeak`, `news`, `insiders`, `llmops` — each targets its single known table prefix directly.
 
 ### Glue Jobs & Schedules
 
-| Source     | Schedule (cron)             | Notes                       |
-|------------|-----------------------------|-----------------------------|
-| yfinance   | `0 21 ? * MON-FRI *`        | After US market close       |
-| fred       | `0 6 1 * ? *`               | 1st of each month           |
-| worldbank  | `0 6 1 1 ? *`               | Jan 1st (annual data)       |
-| sec        | `0 6 1 1,4,7,10 ? *`        | Quarterly                   |
-| wikipedia  | `0 6 ? * MON *`             | Weekly Monday               |
+| Source     | Ingest schedule             | Notes                                          |
+|------------|------------------------------|-------------------------------------------------|
+| yfinance   | `0 21 ? * MON-FRI *`        | After US close. Chunked: month-chunks + 5s inter-chunk delay (Yahoo rate-limit cooldown). Timeout override 60 min. |
+| fred       | `0 6 1 * ? *`                | 1st of each month                              |
+| worldbank  | `0 6 1 1 ? *`                 | Jan 1st (annual)                                |
+| sec        | `0 6 1 1,4,7,10 ? *`          | Quarterly. Timeout override 60 min.            |
+| wikipedia  | `0 6 ? * MON *`               | Weekly Monday                                   |
+| fedspeak   | manual/event-driven           | Tied to FOMC calendar, not periodic            |
+| news       | weekly (Monday)               | Polygon News, 90-day dev backfill              |
+| insiders   | quarterly                     | SEC Form 4, same company universe as `sec`     |
+| companies  | CONDITIONAL trigger only       | Fires after `yfinance` ETL succeeds — no own schedule |
 
-All jobs: Python Shell, Glue 3.0, `max_capacity=0.0625` (1/16 DPU), `timeout=30` min.  
-`--extra-py-files`: entire `ingestion/` dir zipped as CDK S3 asset.  
-`--additional-python-modules`: `yfinance`, `fredapi`, `wbdata`, `pyyaml`
+All Python Shell jobs: Glue 3.0, `max_capacity=0.0625` (1/16 DPU). `--extra-py-files`: entire `ingestion/` dir zipped as CDK S3 asset.
+`ADDITIONAL_MODULES_OVERRIDE["yfinance"]` adds `python-dateutil>=2.8.0` explicitly (month-chunking uses `relativedelta`) on top of the base `yfinance, fredapi, wbdata, pyyaml` module set.
+
+ETL jobs share `ETL_MODULES_BASE = "pandas==2.0.3,pyarrow==14.0.2,pyyaml>=6.0.0"`, with per-job overrides for `sec_prose` (+edgartools) and `embed` (+boto3).
 
 ### DynamoDB
 
 | Table                                    | PK             | SK          | Notes                        |
 |------------------------------------------|----------------|-------------|------------------------------|
-| `trade-platform-{env}-watermarks`        | `source_name`  | `dataset_name` | Tracks last ingested date per ticker |
+| `trade-platform-{env}-watermarks`        | `source_name`  | `dataset_name` | Per-ticker/series last-ingested date |
 | `trade-platform-{env}-conversations`     | `session_id`   | `timestamp` | Agent memory, TTL 30 days    |
 
-### S3 Vectors (Phase 5)
+SEC and insiders use S3 tracker files instead of DynamoDB watermarks (`tracker/sec_{ticker}_tracker.json`, `tracker/{ticker}.json`) — accession lists grow too large for a DynamoDB item.
 
-- Bucket: `{env}-trade-vectors-{account}`
-- Index: `documents-index` — float32, **1024 dims**, cosine distance
-- CDK logical ID: `VectorsIndexV2` (renamed from `VectorsIndex` when dimension changed from 1536→1024; S3 Vectors does not support in-place dimension updates, so renaming the logical ID forces CDK to delete + recreate)
-- Model: `cohere.embed-english-v3` (us-east-1) — switched from Titan Embed v2 (1536d) due to account-level throttling on new accounts. Titan support ticket open.
-- `input_type`: `search_document` at index time (etl_embed.py), `search_query` at retrieval time (api.py) — Cohere v3 optimizes vectors differently per use, improving retrieval quality.
-- IAM: `s3vectors:PutVectors/GetVectors/QueryVectors/ListVectors/DeleteVectors` + both Cohere and Titan Embed ARNs on job role
+### S3 Vectors
 
-### LLMOps (Phase 6)
+- Index: `documents-index` — float32, 1024 dims, cosine. CDK logical ID `VectorsIndexV2`.
+- Model: `cohere.embed-english-v3` (us-east-1).
+- `semantic_search` source filter accepts `EDGAR | WIKIPEDIA | FEDSPEAK`.
 
-- Bucket: `{env}-trade-llmops-{account}` — agent execution traces as JSON
-- S3 prefix: `traces/year=/month=/` — Hive-partitioned for Athena
-- Glue DB: `{env}_trade_llmops`, Crawler runs at 3 AM UTC daily
-- IAM: `grant_read_write` on job role, `grant_read` on crawler role
+### LLMOps
 
-### Secrets Manager
-
-`trade-platform/{env}/fred-api-key` — set manually via `aws secretsmanager put-secret-value`
-
-### IAM Roles
-
-- **GlueCrawlerRole**: `AWSGlueServiceRole` + read all S3 buckets
-- **GlueIngestionJobRole**: `AWSGlueServiceRole` + read/write all buckets + DynamoDB watermarks + conversation table + Secrets Manager FRED key + Bedrock `InvokeModel` (Cohere Embed v3 + Titan Embed v2 ARNs) + S3 Vectors full access + LLMOps bucket read/write
+- Bucket: `{env}-trade-llmops-{account}`, prefix `traces/year=/month=/`.
+- `Trace` (telemetry.py) stores a `result_full` field on each tool-call dict **in memory only** — stripped before the S3 write in `flush()`. `result_preview` (1500 chars, unchanged) is what's actually persisted to S3/Athena.
 
 ---
 
 ## Ingestion Pipeline (`ingestion/`)
 
-### Source Config YAML
-
-Each source has `ingestion/configs/sources/{source}.yaml`:
-
-```yaml
-default_start_date:
-  dev:  "2020-01-01"
-  prod: "2000-01-01"
-frequency: daily          # daily | monthly | quarterly | annual
-max_lookback_days: 30     # overlap window for late data
-tickers: [...]            # or companies, indicators, series, etc.
-```
-
 ### Active Sources
 
 | Source     | Frequency  | Dev data items                                                |
-|------------|------------|---------------------------------------------------------------|
-| yfinance   | daily      | 63 tickers: US equities, global indices, FX pairs, commodities, futures |
-| fred       | monthly    | 13 series: FEDFUNDS, UNRATE, CPIAUCSL, DGS10, DGS2, GDP, M2SL, T10Y2Y, BAMLH0A0HYM2, DTWEXBGS, DEXUSEU, DEXJPUS, UMCSENT |
+|------------|------------|-----------------------------------------------------------------|
+| yfinance   | daily      | 527 tickers: S&P 500 equities + global indices + FX + commodities/futures |
+| fred       | monthly/daily | ~22 series incl. FEDFUNDS, UNRATE, CPIAUCSL, DGS10, DGS2, GDP, T10Y2Y, BAMLH0A0HYM2, DTWEXBGS, DEXUSEU/JPUS/UK/INUS/CHUS, GOLDAMGBD228NLBM, DCOILWTICO |
 | worldbank  | annual     | 5 indicators × 7 countries (US, CN, IN, GB, DE, JP, BR)       |
 | sec        | quarterly  | 7 companies: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM           |
-| wikipedia  | weekly     | 10 topics: Inflation, Recession, Federal_Reserve, Quantitative_easing, 2008_financial_crisis, COVID-19_recession, Silicon_Valley_Bank, … |
+| wikipedia  | weekly     | ~10 topics (Inflation, Recession, Federal_Reserve, Quantitative_easing, 2008_financial_crisis, COVID-19_recession, Silicon_Valley_Bank, …) |
+| fedspeak   | event-driven | FOMC statements/minutes/transcripts + governor speeches      |
+| news       | weekly     | Polygon News, same 7 SEC companies + GLD/USO/TLT/SPY          |
+| insiders   | quarterly  | SEC Form 4, same 7-company universe as `sec`                 |
+
+**Not wired** (script + YAML config exist, no ETL/processed schema/CDK job): `acled`, `comtrade`, `eia`, `imf`, `unctad`, `wto`.
+
+### yfinance Ingestion — Chunking Pattern (`ingest_yfinance.py`)
+
+Fixed an OOM crash (Glue Python Shell, ~512MB ceiling) caused by (1) per-ticker metadata duplicated onto every OHLCV row, and (2) one unbounded `yf.download()` across the entire backfill range.
+
+- `fetch_all_ticker_metadata()` — fetches `sector/market_cap/company_name/...` **once per run**, written to its own file: `{SOURCE}_metadata_{timestamp}.json` (no `_chunk` suffix).
+- `_month_chunks(start, end)` — splits the backfill into calendar-month `(start, end)` tuples via `dateutil.relativedelta`. Chunk *size* stays constant regardless of backfill depth.
+- Each chunk writes its own file: `{SOURCE}_{chunk_start}_{chunk_end}_{timestamp}_chunk{NNN}.json`, and updates per-ticker watermarks **immediately after that chunk** (partial-run recovery — a crash on chunk 40/78 doesn't lose chunks 1-39's watermarks).
+- 5-second `time.sleep()` between chunks (not after the last one) — Yahoo rate-limits rapid back-to-back `yf.download()` calls; confirmed via testing (131/479 tickers failed in one un-delayed test run).
+- `fetch_ticker_meta()` itself (the actual `yf.Ticker().info`/`fast_info` calls) is unchanged.
+
+**Downstream**: `etl_yfinance.py`'s `read_latest_raw()` finds the latest run's timestamp from chunk filenames (`_parse_chunk_filename()`) and reads **all** chunk files sharing it, excluding the metadata file. `etl_companies.py`'s `read_latest_raw()` does the inverse — finds the single `_metadata_` file and reads only that.
 
 ### Watermark Pattern
 
-`get_watermark(source, dataset)` reads DynamoDB; `update_watermark(...)` writes after success.  
-Incremental: each run resolves `start = oldest_watermark - max_lookback_days`.
+`get_watermark(source, dataset)` / `update_watermark(...)`. Incremental: `start = oldest_watermark_across_all_tickers - max_lookback_days`. Resolved **once** before any chunking begins (`_resolve_start()` in `ingest_yfinance.py`) — chunking happens after the range is fixed, not as part of resolving it.
 
 ### EDGAR Pagination (`ingest_sec.py`)
 
-`fetch_submissions()` checks `filings.files[]` and merges continuation pages for companies with >1000 filings.  
-Rate: 150 ms delay between requests (safely under 10 req/s EDGAR limit).
+`fetch_submissions()` merges continuation pages for companies with >1000 filings. 150ms delay between requests.
 
 ---
 
 ## ETL Layer (`ingestion/etl/`)
 
-### Canonical Schemas
+### market_prices (yfinance processed)
 
-**market_prices** (yfinance processed, Parquet partitioned by `year=` / `exchange=`):
+**Partition: `ticker=` / `year=`** (sanitized ticker value in the path — `^GSPC→GSPC`, `CL=F→CL_F`, `BRK-B→BRK_B`). Changed from the old `year=`/`exchange=` layout for ~16x cheaper single-ticker queries.
+
 ```
-ticker       STRING    original value (^GSPC, EURUSD=X)
-exchange     STRING    NYSE | NASDAQ | INDEX | FX | FUTURES | LSE | NSE
+ticker_symbol  STRING    data column — ORIGINAL value (^GSPC, EURUSD=X, BRK-B)
+                         NOTE: 'ticker' exists ONLY as the partition (sanitized) —
+                         a Parquet data column can't share a name with a partition
+                         column (HIVE_INVALID_METADATA). query/api.py SELECTs
+                         'ticker_symbol AS ticker' to recover the display value.
+exchange     STRING    NYSE | NASDAQ | INDEX | FX | FUTURES | LSE | NSE (data column, not partition)
 date         STRING    YYYY-MM-DD
-year         INTEGER   partition key
-country      STRING    US | GB | IN | …
-currency     STRING    USD | GBp | INR | FX
-open/high/low/close/adj_close  DOUBLE
+year         INTEGER   partition column — dropped from Parquet, inferred from path
+country/currency/sector/industry  STRING
+open/high/low/close/adj_close     DOUBLE
 volume       DOUBLE    NULL for FX
 source       STRING    "yfinance"
 metadata     STRING    JSON blob (instrument_type, adj_close_note)
-ingested_at  STRING    ISO UTC timestamp
+ingested_at  STRING
 ```
 
-**economic_indicators** (fred / worldbank processed):
+### companies (yfinance processed — full refresh, no partitions)
+
+Single file `companies/data.parquet`, deleted and rewritten every run (`etl_companies.py`). Built from the separate metadata file (one row per ticker already — `deduplicate()` keeps latest `ingested_at` as a safety net, not strictly needed since metadata is already 1-row-per-ticker).
+
 ```
-indicator_id    STRING    FEDFUNDS | NY.GDP.MKTP.CD | …
-indicator_name  STRING    human-readable
-date            STRING    YYYY-MM-DD (observation date)
-vintage_date    STRING    YYYY-MM-DD (FRED revision date)
-year            INTEGER   partition key
-value           DOUBLE
-unit            STRING
-frequency       STRING    daily | monthly | quarterly | annual
-country         STRING
-ingested_at     STRING
+ticker, company_name, sector, industry, exchange, country, currency, city, state   STRING
+market_cap, beta, dividend_yield, pe_ratio, forward_pe, week52_high, week52_low    DOUBLE
+employees, avg_volume_10d, avg_volume_3m   INTEGER/BIGINT
+description   STRING (truncated 500 chars)
+sp500         BOOLEAN  — cross-referenced against sec_sp500.yaml
+ingested_at   STRING
 ```
 
-**documents** (sec / wikipedia processed, partitioned by `year=`):
+Tool: `get_companies_in_sector(sector, industry?, min_market_cap?, sp500_only?)` — sector/industry discovery step before `get_prices_multi`/`get_insider_summary`/`get_news_summary`. Returns a `Tickers: ...` line meant to be piped directly into a multi-ticker tool.
+
+### economic_indicators (fred / worldbank processed)
+
 ```
-doc_id      STRING    SHA-256 of (source+entity+date+type)
-source      STRING    EDGAR | WIKIPEDIA
-title       STRING
-entity      STRING    ticker or Wikipedia title
-doc_type    STRING    10-K | 10-Q | wiki_article
-doc_date    STRING    filing date or article date
-text        STRING    full text content
-char_count  INTEGER
-year        INTEGER   partition key
-ingested_at STRING
+indicator_id, indicator_name, country   STRING
+date          STRING  observation date
+vintage_date  STRING  FRED revision date — FRED is revision-only-APPEND, never deletes old vintages
+year          INTEGER partition key
+value         DOUBLE
+unit          STRING
+frequency     STRING  daily | weekly | monthly | quarterly | annual
+ingested_at   STRING
 ```
 
-### Exchange Resolution
+**Vintage deduplication**: `_indicator_agg_sql()` in `query/api.py` wraps every query in a `ROW_NUMBER() OVER (PARTITION BY indicator_id, country, date ORDER BY vintage_date DESC) ... WHERE rn = 1` subquery BEFORE any date-range filter, GROUP BY, or passthrough — applies to both the raw passthrough branch and the annual/quarterly/monthly/weekly aggregation branches identically. Without this, a series with 2+ vintage files for overlapping dates returns duplicated/double-counted rows.
 
-`ingest_yfinance.py` fetches `yf.Ticker(ticker).fast_info` per ticker at ingest time, stamps `exchange` + `currency` onto each raw record using `EXCHANGE_NORMALIZE` (NYQ→NYSE, NMS→NASDAQ, etc.).  
-`etl_yfinance.py` reads those fields with instrument-type overrides (INDEX/FX/FUTURES) and a NASDAQ fallback for old raw files without the field.
+**Native frequency lookup**: `get_indicator()`/`get_indicator_multi()` call `_get_native_frequency(series_id, db)`, which reads the `frequency` column directly off the data instead of assuming `"monthly"` for every series. `get_indicator_multi()` resolves granularity **per series inside the loop** (not once, shared, before the loop) — a mixed list like `["FEDFUNDS", "DCOILWTICO"]` correctly gets `monthly` for one and `daily`/`weekly` for the other in the same call.
+
+**Granularity branches** in `_indicator_agg_sql()`: `annual` / `quarterly` / `monthly` / `weekly` (DATE_TRUNC aggregation with AVG) / else=`daily` (raw passthrough, no aggregation). The `weekly` branch was missing until recently — `_indicator_granularity()`'s daily-native branch can return `"weekly"` for 31-365 day ranges, and before the native-frequency fix this value was unreachable in practice (the always-`"monthly"` hardcode meant only `monthly`/`quarterly` ever got produced), so the gap was invisible until then.
+
+**`etl_fred.py`**: `SERIES_FREQUENCY_OVERRIDE` dict — checked BEFORE the fuzzy `FREQ_HINTS` label-substring matching, for series where the substring approach gives a wrong answer (e.g. `usd_eur_rate` label incorrectly fuzzy-matches the `"rate": "monthly"` hint, but `DEXUSEU` is actually daily). Covers `DGS10, DGS2, DTWEXBGS, DEXUSEU, DEXJPUS, DEXUSUK, DEXINUS, DEXCHUS, GOLDAMGBD228NLBM, DCOILWTICO, BAMLH0A0HYM2, T10Y2Y` — all daily.
+
+### documents (sec / wikipedia / fedspeak processed)
+
+```
+doc_id, source, title, entity, doc_type, doc_date, text, char_count, year, ingested_at
+source: EDGAR | WIKIPEDIA | FEDSPEAK
+```
+
+### documents_prose (sec_prose processed) — section-level 10-K/10-Q extraction
+```
+doc_id, entity, form_type, filed_date, section_name, section_title, text, char_count, extraction_method
+```
+
+### news (Polygon processed)
+```
+headline, description, publisher, publisher_tier (1=wire,2=established,3=opinion), sentiment, sentiment_reasoning, published_at, article_url, keywords, primary_ticker
+```
+
+### insider_trades (SEC Form 4 processed)
+```
+ticker, filer_name, filer_role, transaction_date, transaction_type (P/S/A/D/F/M/X/G/J), shares, price_per_share, value_usd, ownership_type, shares_owned_after
+```
 
 ### Embedding ETL (`etl_embed.py`)
 
-Runs after `etl_sec.py` and `etl_wikipedia.py`. For each processed document row:
-
-1. **Chunk** — EDGAR: split on `Item X.` section headers (max 400 tokens, 50 overlap). Wikipedia: split on `\n\n` paragraphs (max 350 tokens, 30 overlap). Both fall back to sliding window. Sizes chosen to stay under Cohere v3's 512-token limit per call.
-2. **Embed** — Bedrock `invoke_model` with `cohere.embed-english-v3`, `input_type=search_document`, 1024 dims. Exponential backoff on throttle.
-3. **Write** — `s3vectors.put_vectors` in batches of 500. Metadata per vector: `doc_id`, `source`, `entity`, `doc_type`, `doc_date`, `title`, `text[:500]` (retrieval preview).
+EDGAR: split on `Item X.` headers, 400 tok max/50 overlap. Wikipedia: split on `\n\n`, 350 tok max/30 overlap. Both Cohere v3, `search_document` at index time. Batches of 500 to `s3vectors.put_vectors`.
 
 ---
 
 ## Query / Agent Layer (`query/`)
 
-### Athena Client (`athena.py`)
+### Tool API (`api.py` + `tools.py`) — 17 tools
 
-- Submits SQL, polls for completion, reads CSV from S3
-- Results bucket: `s3://dev-trade-athena-results-197411402303/`
-- Database naming: `{env}_trade_{source}_processed`
+| Category | Tools |
+|---|---|
+| Price | `get_prices`, `get_prices_multi`, `get_prices_by_sector`, `get_price_on_date`, `get_prices_on_date` |
+| Companies | `get_companies_in_sector` |
+| Indicator | `get_indicator`, `get_indicator_multi`, `get_indicator_on_date`, `get_macro_snapshot` |
+| Documents | `get_documents`, `get_prose`, `semantic_search`, `get_fed_communications` |
+| Sentiment | `get_news`, `get_news_summary`, `get_insider_trades`, `get_insider_summary` |
 
-### Tool API (`api.py` + `tools.py`) — 10 tools
+`get_fed_communications` is the only tool targeting FedSpeak directly (`doc_type`, `entity=speaker-or-FOMC`, date range). `semantic_search(source="FEDSPEAK")` covers broad concept search across the same documents.
 
-| Tool                   | Inputs                               | Notes                                      |
-|------------------------|--------------------------------------|--------------------------------------------|
-| `get_prices`           | ticker, start, end, [exchange]       | Auto-granularity: ≤30d daily, ≤365d weekly, else monthly |
-| `get_prices_multi`     | tickers[], start, end                | Single Athena query, summary per ticker    |
-| `get_price_on_date`    | ticker, date                         | Nearest trading day ≤ date                 |
-| `get_prices_on_date`   | tickers[], date                      | ROW_NUMBER() OVER PARTITION — one query    |
-| `get_indicator`        | series_id, start, end, [country]     | Auto-granularity respects native frequency |
-| `get_indicator_multi`  | series_ids[], start, end             | FRED and WorldBank queried separately, merged |
-| `get_indicator_on_date`| series_ids[], date, [countries]      | Nearest obs ≤ date per series; staleness flags |
-| `get_macro_snapshot`   | as_of_date                           | Multi-indicator snapshot: rates, inflation, yields, GDP, SPY, VIX, Gold, Oil |
-| `get_documents`        | entity, [doc_type, start, end, limit]| Returns first 2000 chars of matching filings |
-| `semantic_search`      | query, [top_k, source, entity]       | Embed via Cohere v3 (`search_query`) → S3 Vectors query_vectors → top-K results with scores |
-
-### Phase 6 Guardrails (`query/telemetry.py`, `query/reflexion.py`)
-
-Every specialist agent run now includes:
+### Self-Critique Guardrails
 
 | Guardrail | Mechanism |
 |-----------|-----------|
-| **Tool deduplication** | `call_sig = f"{tool_name}:{json.dumps(inputs, sort_keys=True)}"` — identical calls return a short-circuit message instead of re-fetching |
-| **Token budget** | 50,000 input+output tokens per agent run; stops early with partial answer if exceeded |
-| **Telemetry** | `Trace` object accumulates iterations, tool calls, token counts, flags; `flush()` writes JSON to `s3://{env}-trade-llmops-{account}/traces/year=/month=/` |
-| **Reflexion** | Haiku critic checks numbers are grounded in tool results; issues found → one retry with guidance injected; second failure → caveat appended to answer |
-
-`session_id` threads from `agent.py` → `orchestrator.py` → `dag_executor.py` → each specialist's `run()` → `Trace`, so all traces for a session share the same session key.
+| Tool dedup | `call_sig = f"{name}:{json.dumps(inputs, sort_keys=True)}"` — repeat calls short-circuit |
+| Token budget | Per-agent budget (Market/Macro 50k, Filings 150k, Sentiment 75k); partial answer on overflow |
+| Telemetry | `Trace` (telemetry.py) → S3 `traces/year=/month=/`. `result_preview` (1500 char) is what's persisted — unchanged. |
+| Reflexion | Haiku critic (`reflexion.py`) checks grounding; now reads **`result_full`** (untruncated, in-memory-only field on the same `tools_called` dict) instead of `result_preview` — fixed a bug where any tool result over 1500 chars got silently truncated before the critic ever saw it, causing false "hallucinated/missing data" verdicts on correct answers. `result_full` is stripped in `Trace.flush()` before the S3 write — persisted shape unchanged. |
 
 ### Multi-Agent Architecture
 
 ```
-agent.py  ──►  orchestrator.py  ──►  planner.py      (Haiku/Sonnet)
-                                          │  JSON DAG
-                                          ▼
-                                     dag_executor.py  (asyncio)
-                                          │
-                          ┌───────────────┼───────────────┐
-                          ▼               ▼               ▼
-                    MarketAgent     MacroAgent      FilingsAgent
-                    (4 tools)       (4 tools)       (4 tools incl.
-                                                     semantic_search)
+agent.py → orchestrator.py → planner.py (Haiku/Sonnet, JSON DAG)
+                                   ↓
+                          dag_executor.py (asyncio)
+              ┌──────────┬──────────┬──────────────┐
+              ▼          ▼          ▼              ▼
+          MarketAgent MacroAgent FilingsAgent  SentimentAgent
 ```
 
-**Planner** (`planner.py`): Haiku (dev) or Sonnet (prod) call that returns a JSON DAG specifying which agents are needed and their `depends_on` relationships. Includes conversation context for the last 2 exchanges so follow-up questions route correctly.
+| Agent | Tools | Notes |
+|---|---|---|
+| MarketAgent | get_prices, get_prices_multi, get_prices_by_sector, get_price_on_date, get_prices_on_date, get_companies_in_sector | |
+| MacroAgent | get_indicator, get_indicator_multi, get_indicator_on_date, get_macro_snapshot | No filings/Fed-doc/sentiment tools |
+| FilingsAgent | get_fed_communications, get_documents, get_prose, semantic_search, get_prices, get_macro_snapshot, get_companies_in_sector | ONLY agent with Fed document tools. Has scratchpad reasoning protocol + batching rules for `get_prose` |
+| SentimentAgent | get_news, get_news_summary, get_insider_trades, get_insider_summary, get_prices, get_price_on_date, get_companies_in_sector | Strict P/S/F transaction-type interpretation rules baked into system prompt (F=tax withholding≠selling, S=often 10b5-1≠bearish, net=P−S only) |
 
-**Executor** (`dag_executor.py`): resolves rounds from the DAG, runs each round with `asyncio.gather` + `run_in_executor` (thread pool) for true parallelism. Agents in later rounds receive prior agents' answers as context. Single-agent DAGs skip synthesis entirely.
+All four share `_run_agent()` (ReAct loop, model `claude-sonnet-4-6`). Each agent's system prompt is now an f-string starting with `Today's date is {datetime.date.today().isoformat()}. ... data available from 2020-01-01 to present.` so agents don't reject genuinely-available recent dates as "future" or "unavailable."
 
-**Registry** (`registry.py`): maps agent names → instances + rich descriptions. The planner prompt is built from these descriptions. Adding a new agent = add class to `sub_agents.py` + entry in `registry.py`.
+**Planner** (`planner.py`): includes an **IMPLICIT DATE RESOLUTION** section — maps relative phrases ("recently", "before earnings", "this quarter", no time reference at all) to default windows per data type, so the planner resolves dates itself rather than asking the user. Also resolves agent routing via explicit content rules (e.g. Fed communications → filings never macro; insider/news keywords → sentiment never filings).
 
-**Specialist Agents** (`sub_agents.py`):
-
-| Agent        | Tool subset                                                  |
-|--------------|--------------------------------------------------------------|
-| MarketAgent  | get_prices, get_prices_multi, get_price_on_date, get_prices_on_date |
-| MacroAgent   | get_indicator, get_indicator_multi, get_indicator_on_date, get_macro_snapshot |
-| FilingsAgent | get_documents, semantic_search, get_prices, get_macro_snapshot |
-
-All three share a single `_run_agent()` ReAct loop with model `claude-sonnet-4-6`.
-
-### Memory (`memory.py`)
-
-DynamoDB `trade-platform-{env}-conversations` table:
-- `save_turn(session_id, role, content)` — writes with TTL 30 days
-- `load_turns(session_id, max_turns=10)` — queries newest-first, reverses to chronological, returns `[{role, content}]` ready for the Anthropic messages array
-- `list_sessions()` / `clear_session()` — for CLI management
+**Executor** (`dag_executor.py`): when a round has 2+ agents with no `depends_on`, each gets a role-scoping hint appended to its question (`ROLE_DESCRIPTIONS` dict) so it doesn't try to answer outside its domain or ask for clarification about another agent's data. Synthesis call uses a `SYNTHESIS_SYSTEM` prompt instructing it to note partial-data gaps in one sentence rather than blocking the answer.
 
 ### CLI (`agent.py`)
 
 ```
-python query/agent.py --question "..." --no-memory          # single shot
-python query/agent.py --session "q3-analysis" --question "..."  # with memory
+python query/agent.py --question "..." --no-memory
+python query/agent.py --session "q3-analysis" --question "..."
 python query/agent.py --session "q3-analysis"               # interactive REPL
-python query/agent.py --list-sessions
-python query/agent.py --clear-session "q3-analysis"
+python query/agent.py --list-sessions / --clear-session "..."
 ```
+
+---
+
+## verify_pipeline.py
+
+Per-source health check + `--reset`/`--fire` CLI. `SOURCE_CONFIG` dict has an entry per source; sources with `raw_bucket: None` (derived sources with no raw layer of their own — currently `companies`, which is derived from `yfinance`'s raw data) get the raw-bucket check, watermark/tracker check, and reset's raw-bucket-clear step all guarded with `if cfg.get("raw_bucket"): ... else: print("N/A")` — only the processed-bucket/crawler/ETL-job/Athena checks run unconditionally.
 
 ---
 
@@ -388,67 +389,27 @@ python query/agent.py --clear-session "q3-analysis"
 |-----------------------------------|---------------------------------------------------------------|
 | AWS region                        | `us-east-2`                                                   |
 | Dev account ID                    | `197411402303`                                                |
-| Athena results bucket             | `s3://dev-trade-athena-results-197411402303/`                 |
-| FRED secret path                  | `trade-platform/dev/fred-api-key`                             |
 | Embed model                       | `cohere.embed-english-v3` (us-east-1)                        |
-| Vector index name                 | `documents-index`                                             |
 | Vector dimensions                 | 1024                                                          |
-| Embed token limit                 | 512 tokens per chunk (~2000 chars)                            |
-| EDGAR chunk size                  | 400 tokens max, 50 overlap                                    |
-| Wikipedia chunk size              | 350 tokens max, 30 overlap                                    |
-| Glue version                      | 3.0                                                           |
-| Python Shell max_capacity         | 0.0625 DPU (1/16)                                             |
-| Dev data start date               | 2020-01-01                                                    |
-| Prod data start date              | 2000-01-01                                                    |
+| Glue version / Python Shell DPU   | 3.0 / 0.0625 (1/16)                                          |
+| yfinance ingestion timeout        | 60 min (override; chunked run measured ~25 min for full 2023→today backfill, 527 tickers) |
+| yfinance inter-chunk delay        | 5 seconds                                                     |
+| Dev data start date               | 2020-01-01 (most sources) / 2023-01-01 (yfinance, insiders)  |
 | Agent model (specialists)         | `claude-sonnet-4-6`                                           |
-| Planner/synthesis model (dev)     | `claude-haiku-4-5-20251001`                                   |
-| Planner/synthesis model (prod)    | `claude-sonnet-4-6`                                           |
-| Reflexion/critic model (dev)      | `claude-haiku-4-5-20251001`                                   |
-| Reflexion/critic model (prod)     | `claude-sonnet-4-6`                                           |
-| Token budget per agent run        | 50,000 tokens                                                 |
+| Planner/synthesis/critic model    | `claude-haiku-4-5-20251001` (dev) / `claude-sonnet-4-6` (prod) |
+| Token budget — Market/Macro       | 50,000                                                        |
+| Token budget — Filings            | 150,000                                                       |
+| Token budget — Sentiment          | 75,000                                                        |
+| Telemetry truncation              | `result_preview` 1500 chars (S3-persisted); `result_full` untruncated (in-memory only, reflexion input) |
 | Session memory TTL                | 30 days                                                       |
-| Max turns loaded per session      | 10 exchanges (20 DynamoDB items)                              |
-| Telemetry S3 prefix               | `traces/year=/month=/`                                        |
 
 ---
 
-## Open Architectural Decisions
+## Known Gaps (factual, not decisions-pending)
 
-### 1. Partition layout for market_prices
-`etl_yfinance.py` partitions by `year=` / `exchange=`. No ticker-level pruning — Athena scans a full exchange-year file for any single-ticker query.  
-**Decision needed:** Add `ticker=` as a third partition level, or keep flat and rely on Athena predicate pushdown?
-
-### 2. etl_yfinance reads only the latest raw file
-`read_latest_raw()` sorts S3 keys and takes `[-1]` — misses any backfill files.  
-**Decision needed:** Process all unprocessed files (watermark-tracked) or keep single-latest pattern?
-
-### 3. Remaining 6 sources (ACLED, Comtrade, EIA, IMF, UNCTAD, WTO)
-Scripts exist but no ETL, processed schema, or CDK wiring.  
-**Decision needed:** Priority order and canonical schema for each.
-
-### 4. SQL injection at Athena boundaries
-Tool functions build SQL via f-string interpolation of LLM-supplied values. Safe today because the LLM follows tool schemas, not raw user input.  
-**Decision needed:** Add allowlist + regex sanitizer before exposing any HTTP endpoint.
-
-### 5. Embedding pipeline scheduling
-`etl_embed.py` runs manually or as a separate Glue job. No CDK trigger yet.  
-**Decision needed:** Trigger `etl_embed` automatically after `etl_sec` / `etl_wikipedia` complete, or run on its own weekly schedule?
-
-### 6. HTTP serving surface
-CLI only today. No Lambda, API Gateway, or FastAPI wrapper.  
-**Decision needed:** Streaming vs. batch response, auth model, whether to expose orchestrator or individual agents.
-
-### 7. LLMOps Athena table
-Traces land in S3; the Glue Crawler runs at 3 AM UTC. Until the first crawler run there is no Athena table.  
-**Decision needed:** Run crawler on-demand after first deploy, or add a one-shot CfnTrigger with `type=ON_DEMAND` that fires at deploy time?
-
-### 8. Reflexion scope
-Reflexion currently runs on every agent answer, including short factual responses where the critic call is wasted latency.  
-**Decision needed:** Add a token-count or answer-length threshold below which reflexion is skipped automatically?
-
-### 9. Cohere Embed quota (monitoring)
-Switched from Titan to Cohere v3 to avoid per-account throttling on new accounts. If Cohere rate limits are hit, exponential backoff in `embed_text()` handles up to 5 retries. `semantic_search()` returns a graceful fallback message when the vector index is empty.
-
-### 10. Fan-out / parallel same-agent instances
-Current registry supports one instance per agent type. For questions needing the same agent twice in parallel (e.g. "compare AAPL 10-K 2021 vs 2023"), a fan-out pattern would spin up parallel named instances.  
-**Decision needed:** Implement when 2+ same-agent parallel calls become a common pattern.
+1. **6 sources unwired**: `acled`, `comtrade`, `eia`, `imf`, `unctad`, `wto` — ingestion scripts + YAML configs exist, no ETL/processed schema/CDK job.
+2. **SQL built via f-string interpolation** of LLM-supplied tool args throughout `query/api.py`. Safe only because callers are constrained by Anthropic tool schemas, not raw user HTTP input — would need an allowlist/sanitizer before any HTTP-facing surface.
+3. **No HTTP serving surface** — CLI only (`query/agent.py`).
+4. **`sec_sp500.yaml` appears unpopulated** in dev as of last check — `companies.sp500` flag may read as all-`False`; not yet root-caused.
+5. **Old wrong-vintage rows not purged** — the vintage-dedup fix (`_indicator_agg_sql`) makes queries correctly ignore stale vintages, but the stale rows themselves are still in S3/Parquet for any series ETL'd before the `etl_fred.py` frequency fix. Cleanup is a deliberate separate decision (could affect revision-history integrity if done carelessly).
+6. **Yahoo rate-limiting risk scales with chunk count** — the 5s inter-chunk delay was verified to help on a 3-chunk test; a full 42-chunk backfill firing chunks this tightly could still hit Yahoo's limiter more than the 3-chunk test did. No retry-failed-tickers mechanism exists yet.

@@ -166,9 +166,10 @@ def _parse_chunk_filename(key: str):
     return timestamp, chunk_label
 
 
-def read_latest_raw() -> list:
+def find_latest_run_chunk_keys() -> list:
     """
-    Read ALL price-chunk files from the most recent ingestion run.
+    List S3 keys for ALL chunk files from the most recent ingestion run,
+    WITHOUT fetching their contents — just key listing/filtering/grouping.
 
     A single run now produces multiple chunk files sharing the same
     timestamp suffix (...{timestamp}_chunk{NNN}.json) plus one separate
@@ -194,16 +195,17 @@ def read_latest_raw() -> list:
     run_keys = sorted(k for k, (timestamp, _) in parsed
                        if timestamp == latest_timestamp)
 
-    print(f"  Reading {len(run_keys)} chunk files from run {latest_timestamp}")
-    records = []
-    for key in run_keys:
-        obj = s3.get_object(Bucket=RAW_BUCKET, Key=key)
-        records.extend(json.loads(obj["Body"].read()))
+    print(f"  Found {len(run_keys)} chunk files from run {latest_timestamp}")
+    return run_keys
 
-    tickers = sorted(set(r["ticker"] for r in records))
-    print(f"  Loaded {len(records)} total records — "
-          f"{len(tickers)} tickers: {tickers}")
-    return records
+
+def read_one_chunk(key: str) -> list:
+    """
+    Fetch and parse a SINGLE chunk file. Called once per chunk inside the
+    main processing loop — never accumulates raw records across chunks.
+    """
+    obj = s3.get_object(Bucket=RAW_BUCKET, Key=key)
+    return json.loads(obj["Body"].read())
 
 
 def write_processed(rows: list) -> int:
@@ -363,9 +365,26 @@ def main():
     config = load_config()
     print(f"  Tickers: {len(config.get('tickers', []))} configured")
 
-    records       = read_latest_raw()
-    rows          = transform(records, config)
-    total_written = write_processed(rows)
+    run_keys = find_latest_run_chunk_keys()
+
+    # Accumulate TRANSFORMED rows only — transform() already filters to
+    # the config ticker list and drops invalid rows, so this is meaningfully
+    # smaller than holding all chunks' raw records simultaneously. Each
+    # chunk's raw records are fetched, transformed, and dropped before the
+    # next chunk is fetched — peak memory is bounded to ~one chunk's raw
+    # data plus the running transformed-rows total, not the whole run.
+    all_rows = []
+    for i, key in enumerate(run_keys, 1):
+        print(f"\n  Processing chunk {i}/{len(run_keys)}: {key}")
+        chunk_records = read_one_chunk(key)
+        chunk_rows    = transform(chunk_records, config)
+        all_rows.extend(chunk_rows)
+        print(f"    {len(chunk_records)} raw records → "
+              f"{len(chunk_rows)} transformed rows "
+              f"(running total: {len(all_rows)})")
+        del chunk_records, chunk_rows
+
+    total_written = write_processed(all_rows)
 
     print(f"\n{'─'*50}")
     print(f"Done. {total_written} rows written.")

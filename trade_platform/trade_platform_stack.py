@@ -508,7 +508,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=60,
+            timeout=150,
             description=f"[{env_name}] SEC EDGAR ingestion — submissions + facts",
         )
 
@@ -675,7 +675,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=30,
+            timeout=150,
             description=f"[{env_name}] SEC XBRL → Parquet ETL",
         )
 
@@ -702,7 +702,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=60,
+            timeout=150,
             description=f"[{env_name}] SEC 10-K/10-Q prose sections → Parquet",
         )
 
@@ -729,7 +729,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=60,
+            timeout=150,
             description=f"[{env_name}] Cohere embed → S3 Vectors",
         )
 
@@ -1082,7 +1082,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=30,
+            timeout=150,
             description=f"[{env_name}] Polygon/Massive news ingestion — weekly",
         )
 
@@ -1109,7 +1109,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=30,
+            timeout=150,
             description=f"[{env_name}] Polygon news raw JSON → Parquet ETL",
         )
 
@@ -1275,7 +1275,7 @@ class TradePlatformStack(Stack):
             },
             glue_version="3.0",
             max_capacity=0.0625,
-            timeout=30,
+            timeout=150,
             description=f"[{env_name}] Insider trades raw → Parquet ETL",
         )
 
