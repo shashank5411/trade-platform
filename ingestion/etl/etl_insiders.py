@@ -106,12 +106,39 @@ def read_existing_filing_ids() -> set:
 
 # ── Write Parquet partition ───────────────────────────────────────────────────
 def write_partition(rows: list, year: int, ticker: str) -> None:
+    """Write a (year, ticker) partition, MERGING with any existing data
+    rather than overwriting it. Existing rows are read first, deduplicated
+    against new rows by filing_id, and the combined set is written back."""
     if not rows:
         return
 
-    df = pd.DataFrame(rows)
+    key = f"insider_trades/year={year}/ticker={ticker}/data.parquet"
 
-    # Remove partition columns from Parquet
+    # Read existing partition data, if any, before writing
+    existing_rows = []
+    try:
+        obj = s3.get_object(Bucket=PROC_BUCKET, Key=key)
+        existing_df = pq.read_table(io.BytesIO(obj["Body"].read())).to_pandas()
+        existing_rows = existing_df.to_dict(orient="records")
+        print(f"  Merging with {len(existing_rows)} existing rows at {key}")
+    except s3.exceptions.NoSuchKey:
+        pass
+    except Exception as e:
+        print(f"  WARN: could not read existing partition {key}: {e} "
+              f"— proceeding with new rows only, but this risks "
+              f"DROPPING existing data if the file genuinely exists and "
+              f"this read failure is not a true NoSuchKey. Investigate "
+              f"if this warning appears in practice.")
+
+    # Merge: existing + new, dedup by filing_id (new rows win if somehow
+    # the same filing_id appears in both — shouldn't normally happen
+    # since main() already filters by existing_ids before calling this,
+    # but dedup here too as defense-in-depth against any future caller
+    # that doesn't pre-filter)
+    combined = existing_rows + rows
+    df = pd.DataFrame(combined)
+    df = df.drop_duplicates(subset=["filing_id"], keep="last")
+
     parquet_cols = [f.name for f in SCHEMA]
     for col in parquet_cols:
         if col not in df.columns:
@@ -130,9 +157,10 @@ def write_partition(rows: list, year: int, ticker: str) -> None:
     pq.write_table(table, buf, compression="snappy")
     buf.seek(0)
 
-    key = f"insider_trades/year={year}/ticker={ticker}/data.parquet"
     s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.read())
-    print(f"  Written: s3://{PROC_BUCKET}/{key} ({len(rows)} rows)")
+    print(f"  Written: s3://{PROC_BUCKET}/{key} "
+          f"({len(combined)} total rows: {len(existing_rows)} existing + "
+          f"{len(rows)} new, after dedup: {len(df)})")
 
 # ── Main ETL ──────────────────────────────────────────────────────────────────
 def main():
