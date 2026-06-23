@@ -162,8 +162,8 @@ Separately-wired crawlers (own CfnCrawler blocks, NOT affected by `PROCESSED_PAT
 | sec        | `0 6 1 1,4,7,10 ? *`          | Quarterly. Timeout override 60 min.            |
 | wikipedia  | `0 6 ? * MON *`               | Weekly Monday                                   |
 | fedspeak   | manual/event-driven           | Tied to FOMC calendar, not periodic            |
-| news       | weekly (Monday)               | Polygon News, 90-day dev backfill              |
-| insiders   | quarterly                     | SEC Form 4, same company universe as `sec`     |
+| news       | weekly (Monday)               | Polygon News, 13 equities + 4 ETF proxies. Dev backfill_days=1400 in YAML (not yet wired — see Known Gaps) |
+| insiders   | quarterly                     | SEC Form 4, 13-company universe matching `sec` |
 | companies  | CONDITIONAL trigger only       | Fires after `yfinance` ETL succeeds — no own schedule |
 
 All Python Shell jobs: Glue 3.0, `max_capacity=0.0625` (1/16 DPU). `--extra-py-files`: entire `ingestion/` dir zipped as CDK S3 asset.
@@ -202,13 +202,21 @@ SEC and insiders use S3 tracker files instead of DynamoDB watermarks (`tracker/s
 | yfinance   | daily      | 527 tickers: S&P 500 equities + global indices + FX + commodities/futures |
 | fred       | monthly/daily | ~22 series incl. FEDFUNDS, UNRATE, CPIAUCSL, DGS10, DGS2, GDP, T10Y2Y, BAMLH0A0HYM2, DTWEXBGS, DEXUSEU/JPUS/UK/INUS/CHUS, GOLDAMGBD228NLBM, DCOILWTICO |
 | worldbank  | annual     | 5 indicators × 7 countries (US, CN, IN, GB, DE, JP, BR)       |
-| sec        | quarterly  | 7 companies: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM           |
+| sec        | quarterly  | 13 companies: AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM, JNJ, WMT, CAT, PG, KO, DIS |
 | wikipedia  | weekly     | ~10 topics (Inflation, Recession, Federal_Reserve, Quantitative_easing, 2008_financial_crisis, COVID-19_recession, Silicon_Valley_Bank, …) |
 | fedspeak   | event-driven | FOMC statements/minutes/transcripts + governor speeches      |
-| news       | weekly     | Polygon News, same 7 SEC companies + GLD/USO/TLT/SPY          |
-| insiders   | quarterly  | SEC Form 4, same 7-company universe as `sec`                 |
+| news       | weekly     | Polygon News, 17 tickers: 13 equities (AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM, JNJ, WMT, CAT, PG, KO, DIS) + GLD/USO/TLT/SPY |
+| insiders   | quarterly  | SEC Form 4, same 13-company universe as `sec` (AAPL, MSFT, GOOGL, AMZN, JPM, BAC, XOM, JNJ, WMT, CAT, PG, KO, DIS) |
 
 **Not wired** (script + YAML config exist, no ETL/processed schema/CDK job): `acled`, `comtrade`, `eia`, `imf`, `unctad`, `wto`.
+
+### ingest_insiders.py / ingest_news.py — wired to YAML configs
+
+Both scripts previously hardcoded their ticker lists (and `ingest_news.py` its publisher-tier map) directly in Python, fully ignoring the already-correct YAML configs. Both now read from YAML at runtime:
+
+- `ingest_insiders.py`: `main()` reads `tickers` from `insiders.yaml` via `load_source_config("insiders")`, looks each up in `TICKER_CIKS` (still hardcoded — CIK numbers are static reference data, not config), and `WARN`s-and-skips (not crashes) any YAML ticker missing a CIK mapping. `START_DATE` now resolves via `get_default_start(_config)` reading `insiders.yaml`'s `default_start_date` (`dev: 2023-01-01`) — previously the script had its own hardcoded `2020-01-01` fallback that silently diverged from the YAML's documented intent.
+- `ingest_news.py`: `main()` reads `tickers` from `news.yaml`. `PUBLISHER_TIERS` (hardcoded flat dict) removed entirely — replaced by `_build_publisher_tier_map(config)`, which flattens `news.yaml`'s `tier_1/2/3` lists into the same `{name: tier}` shape `get_publisher_tier()` needs. `get_publisher_tier()` and `process_article()` both take `tier_map` as an explicit parameter now, not a module global.
+- `news.yaml`'s `backfill_days.dev` is currently `1400` (not the original `90`) and `default_start_date.prod` is `2024-01-01` — both since adjusted externally; `BACKFILL_DAYS` itself is NOT yet wired to this YAML field (still the script's own module-level fallback) since dev/prod previously resolved to the same value either way — now that dev `backfill_days` differs (1400) this is a live divergence worth revisiting.
 
 ### yfinance Ingestion — Chunking Pattern (`ingest_yfinance.py`)
 
@@ -220,7 +228,7 @@ Fixed an OOM crash (Glue Python Shell, ~512MB ceiling) caused by (1) per-ticker 
 - 5-second `time.sleep()` between chunks (not after the last one) — Yahoo rate-limits rapid back-to-back `yf.download()` calls; confirmed via testing (131/479 tickers failed in one un-delayed test run).
 - `fetch_ticker_meta()` itself (the actual `yf.Ticker().info`/`fast_info` calls) is unchanged.
 
-**Downstream**: `etl_yfinance.py`'s `read_latest_raw()` finds the latest run's timestamp from chunk filenames (`_parse_chunk_filename()`) and reads **all** chunk files sharing it, excluding the metadata file. `etl_companies.py`'s `read_latest_raw()` does the inverse — finds the single `_metadata_` file and reads only that.
+**Downstream**: `etl_yfinance.py`'s `find_latest_run_chunk_keys()` finds the latest run's timestamp from chunk filenames (`_parse_chunk_filename()`, unchanged) and lists **all** chunk keys sharing it, excluding the metadata file — but does NOT fetch them all into memory at once (see ETL Layer below for the matching OOM fix on the ETL side). `etl_companies.py`'s `read_latest_raw()` does the inverse — finds the single `_metadata_` file and reads only that.
 
 ### Watermark Pattern
 
@@ -254,6 +262,10 @@ source       STRING    "yfinance"
 metadata     STRING    JSON blob (instrument_type, adj_close_note)
 ingested_at  STRING
 ```
+
+### etl_yfinance.py — chunk-by-chunk processing (OOM fix)
+
+The ingestion-side month-chunking fix (above) inadvertently moved the OOM problem downstream: the original `read_latest_raw()` read ALL 42 chunk files into one giant in-memory list before `transform()`/`write_processed()` ever ran (~465k records for a full backfill), defeating the point of chunking. Fixed by splitting into `find_latest_run_chunk_keys()` (list/filter only, no fetch) and `read_one_chunk(key)` (fetches one chunk), with `main()` looping chunk-by-chunk: fetch → `transform()` → `extend(all_rows)` → explicit `del` of that chunk's raw records before fetching the next. `write_processed()` is still called exactly ONCE at the end with the full accumulated (and much smaller, since `transform()` already filters/validates) row list — verified end-to-end against the real 42-chunk/527-ticker backfill: 440,709 rows written, ~4 min runtime, zero OOM, all 12 months present per ticker per year (no chunk-boundary data loss).
 
 ### companies (yfinance processed — full refresh, no partitions)
 
@@ -305,13 +317,19 @@ doc_id, entity, form_type, filed_date, section_name, section_title, text, char_c
 
 ### news (Polygon processed)
 ```
-headline, description, publisher, publisher_tier (1=wire,2=established,3=opinion), sentiment, sentiment_reasoning, published_at, article_url, keywords, primary_ticker
+article_id, headline, description, author, published_at, publisher, publisher_tier (1=wire,2=established,3=opinion), tickers (JSON array), sentiment, sentiment_reasoning, keywords (JSON array), article_url, week, ingested_at
 ```
+Partition: `news/year={year}/primary_ticker={ticker}/data.parquet` — `primary_ticker` is partition-only, NOT a Parquet column.
 
 ### insider_trades (SEC Form 4 processed)
 ```
-ticker, filer_name, filer_role, transaction_date, transaction_type (P/S/A/D/F/M/X/G/J), shares, price_per_share, value_usd, ownership_type, shares_owned_after
+filing_id, accession, filer_name, filer_role, transaction_date, transaction_type (P/S/A/D/F/M/X/G/J), shares, price_per_share, value_usd, ownership_type, shares_owned_after, ingested_at
 ```
+Partition: `insider_trades/year={year}/ticker={ticker}/data.parquet`.
+
+**Merge-before-write fix (`etl_insiders.py` and `etl_news.py`)**: both `write_partition()` functions previously did a full `put_object` OVERWRITE containing only the current run's NEW rows — `main()` in both files filters out anything already in `existing_ids`/`existing_filing_ids` before grouping into partitions, so any run after the first one would silently discard every previously-written row for a partition the moment it found even one new row for it. Fixed identically in both: read the existing partition file first (`except s3.exceptions.NoSuchKey: pass` if none — confirmed this is genuinely the exception raised, not assumed), merge with the new rows, `drop_duplicates(subset=["filing_id"]/["article_id"], keep="last")`, write the combined set back once. Verified via synthetic-row injection against real partitions: existing rows correctly preserved and merged (not lost), defensive dedup confirmed to actually collapse an injected duplicate to one surviving copy, and a from-scratch partition (no existing file) still produces identical output to the old behavior.
+
+**Separate bug found and fixed in `etl_news.py`'s `read_existing_article_ids()`**: it built dedup keys as `f"{row['article_id']}:{row.get('primary_ticker', '')}"` — but `primary_ticker` is a partition-only column, never actually written into the Parquet file, so `.get()` always fell through to `''`. Every key looked like `"abc123:"`, which never matched `main()`'s real filter keys (`"abc123:BAC"`), so the incremental-skip check was a complete no-op — every run reprocessed the entire historical article set (confirmed: a run reported "4760 new rows written" exactly equal to the total raw article count, not the genuinely-new delta). Fixed by deriving `ticker` from the S3 key path via regex (`primary_ticker=([^/]+)/`), the same technique `read_raw_articles()` already used correctly for the raw bucket's `ticker=` prefix. This was a cost/performance bug, not a correctness bug — the merge-before-write fix's dedup step already absorbed the consequence — but every future run was silently doing far more S3 I/O than necessary until this was fixed. `etl_insiders.py`'s equivalent function (`read_existing_filing_ids()`) does not have this bug — it keys on `filing_id` alone, no partition-column lookup involved.
 
 ### Embedding ETL (`etl_embed.py`)
 
@@ -356,13 +374,15 @@ agent.py → orchestrator.py → planner.py (Haiku/Sonnet, JSON DAG)
 | Agent | Tools | Notes |
 |---|---|---|
 | MarketAgent | get_prices, get_prices_multi, get_prices_by_sector, get_price_on_date, get_prices_on_date, get_companies_in_sector | |
-| MacroAgent | get_indicator, get_indicator_multi, get_indicator_on_date, get_macro_snapshot | No filings/Fed-doc/sentiment tools |
+| MacroAgent | get_indicator, get_indicator_multi, get_indicator_on_date, get_macro_snapshot | No filings/Fed-doc/sentiment tools. Now explicitly told `DCOILWTICO` (WTI crude spot, FRED, official daily $/barrel) IS in its toolset, distinct from `CL=F` futures (MarketAgent) — see commodity disambiguation below |
 | FilingsAgent | get_fed_communications, get_documents, get_prose, semantic_search, get_prices, get_macro_snapshot, get_companies_in_sector | ONLY agent with Fed document tools. Has scratchpad reasoning protocol + batching rules for `get_prose` |
 | SentimentAgent | get_news, get_news_summary, get_insider_trades, get_insider_summary, get_prices, get_price_on_date, get_companies_in_sector | Strict P/S/F transaction-type interpretation rules baked into system prompt (F=tax withholding≠selling, S=often 10b5-1≠bearish, net=P−S only) |
 
 All four share `_run_agent()` (ReAct loop, model `claude-sonnet-4-6`). Each agent's system prompt is now an f-string starting with `Today's date is {datetime.date.today().isoformat()}. ... data available from 2020-01-01 to present.` so agents don't reject genuinely-available recent dates as "future" or "unavailable."
 
 **Planner** (`planner.py`): includes an **IMPLICIT DATE RESOLUTION** section — maps relative phrases ("recently", "before earnings", "this quarter", no time reference at all) to default windows per data type, so the planner resolves dates itself rather than asking the user. Also resolves agent routing via explicit content rules (e.g. Fed communications → filings never macro; insider/news keywords → sentiment never filings).
+
+**Commodity price disambiguation** (planner routing rule 4): oil/gas/gold/silver have TWO valid, non-interchangeable data sources — `market` (`get_prices` with `CL=F`/`GC=F`/`SI=F`/`NG=F` → futures/contract price, ticker-based) vs `macro` (`get_indicator` with `DCOILWTICO`/`DCOILBRENTEU` etc. → official daily SPOT price from FRED). Routes to `market` for "futures"/ticker-syntax/trading-performance framing, `macro` for "spot price"/economic-indicator framing ("oil prices and inflation"), and to **both in parallel** when genuinely ambiguous (e.g. bare "price of WTI crude oil") — synthesis then presents both figures labeled by source rather than guessing which was meant.
 
 **Executor** (`dag_executor.py`): when a round has 2+ agents with no `depends_on`, each gets a role-scoping hint appended to its question (`ROLE_DESCRIPTIONS` dict) so it doesn't try to answer outside its domain or ask for clarification about another agent's data. Synthesis call uses a `SYNTHESIS_SYSTEM` prompt instructing it to note partial-data gaps in one sentence rather than blocking the answer.
 
@@ -413,3 +433,6 @@ Per-source health check + `--reset`/`--fire` CLI. `SOURCE_CONFIG` dict has an en
 4. **`sec_sp500.yaml` appears unpopulated** in dev as of last check — `companies.sp500` flag may read as all-`False`; not yet root-caused.
 5. **Old wrong-vintage rows not purged** — the vintage-dedup fix (`_indicator_agg_sql`) makes queries correctly ignore stale vintages, but the stale rows themselves are still in S3/Parquet for any series ETL'd before the `etl_fred.py` frequency fix. Cleanup is a deliberate separate decision (could affect revision-history integrity if done carelessly).
 6. **Yahoo rate-limiting risk scales with chunk count** — the 5s inter-chunk delay was verified to help on a 3-chunk test; a full 42-chunk backfill firing chunks this tightly could still hit Yahoo's limiter more than the 3-chunk test did. No retry-failed-tickers mechanism exists yet.
+7. **`ingest_news.py`'s `BACKFILL_DAYS` not wired to `news.yaml`** — still the script's own module-level fallback (`args.backfill_days or 90`), unlike `tickers` (now YAML-driven). This was a no-op gap when dev/prod both resolved to 90, but `news.yaml`'s `backfill_days.dev` has since been changed to `1400` externally — that value is currently **not actually read by the script**, so the live effective backfill window may not match what the YAML appears to declare. Worth reconciling.
+8. **Leftover synthetic test rows** from `etl_insiders.py`/`etl_news.py` merge-fix verification are blended into real partitions (`BAC` insider_trades, `BAC`/`JPM`/`USO` news/insiders test rows with `SYNTHETIC-TEST-*`/`UNIT-TEST-*` filing_ids/article_ids) — not cleaned up since removing them requires a read-filter-rewrite per partition, not a simple delete.
+9. **`FILINGS_SYSTEM` (in `sub_agents.py`) still lists only 7 companies** for SEC filings/10-K/10-Q coverage (`AAPL MSFT GOOGL AMZN JPM BAC XOM`), while `sec.yaml` now configures 13 (`ingest_sec.py` confirmed reading `config["companies"]` directly, so all 13 ARE being ingested). Whether `documents`/`documents_prose` already have real data for the 6 new companies (JNJ, WMT, CAT, PG, KO, DIS) depends on whether `etl_sec.py`/`etl_sec_prose.py` have actually been re-run since the YAML expansion — not verified. Either way, FilingsAgent's system prompt is stale and should be updated to match.

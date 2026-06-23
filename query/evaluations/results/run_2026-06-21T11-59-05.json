@@ -1,0 +1,726 @@
+{
+  "summary": {
+    "run_id": "2026-06-21T11-59-05",
+    "total_questions": 23,
+    "pass_rates_by_category": {
+      "routing": "13/14",
+      "grounding": "4/6",
+      "tool_selection": "3/3"
+    },
+    "total_passed": 20,
+    "failures": [
+      {
+        "id": "SEQ-FILINGS-MARKET-001",
+        "category": "routing",
+        "reason": "routing mismatch (expected ['filings', 'market'], got ['macro', 'market'])"
+      },
+      {
+        "id": "GROUND-MARKET-001",
+        "category": "grounding",
+        "reason": "routing mismatch (expected ['market'], got ['macro', 'filings'])"
+      },
+      {
+        "id": "GROUND-SENTIMENT-001",
+        "category": "grounding",
+        "reason": "routing mismatch (expected ['sentiment'], got ['sentiment', 'filings']); grounding failure: ['lost confidence']"
+      }
+    ]
+  },
+  "results": [
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "BASE-MARKET-001",
+      "question": "How did AAPL perform over the last 6 months?",
+      "category": "routing",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "## AAPL Performance Over the Last 6 Months\n\n**Date Range:** December 22, 2025 \u2013 June 15, 2026 (26 weeks)\n\n**Key Performance Metrics:**\n- **Starting Price:** $272.89\n- **Ending Price:** $298.01\n- **Total Return:** +9.2%\n- **High:** $317.40\n- **Low:** $242.97\n\nApple showed positive momentum over the 6-month period, gaining 9.2% from the start to the end. The stock experienced some volatility in January and early March, when prices dipped toward the low of $242.97. However, AAPL recovered from those lows and built momentum, particularly strong from late April through mid-May, reaching its peak of $317.40 during that rally. The stock then experienced a pullback in early June before stabilizing around $298 by mid-June.",
+      "latency_ms": 9450,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "BASE-MACRO-001",
+      "question": "What was the unemployment rate in 2023?",
+      "category": "routing",
+      "expected_agents": [
+        "macro"
+      ],
+      "actual_agents": [
+        "macro"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MacroAgent": [
+          "get_indicator"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "**Unemployment Rate in 2023**\n\nThe unemployment rate throughout 2023 was quite low and stable, ranging between **3.4% and 3.9%**:\n\n- **Lowest point**: 3.4% in April 2023\n- **Highest point**: 3.9% in October 2023\n- **Year average**: Approximately 3.6%\n\nThis reflects a historically tight labor market. The rate climbed slightly in the final months of the year (October-December), rising toward 3.8-3.9%, but overall 2023 showed consistent low unemployment by historical standards. This tight labor market was one of the key factors supporting wage growth and inflation pressures during that period, even as the Federal Reserve was working to bring inflation down from its 2022 peaks.",
+      "latency_ms": 8928,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "BASE-FILINGS-001",
+      "question": "What are Apple's main risk factors?",
+      "category": "routing",
+      "expected_agents": [
+        "filings"
+      ],
+      "actual_agents": [
+        "filings"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "FilingsAgent": [
+          "get_prose",
+          "semantic_search",
+          "get_documents",
+          "semantic_search"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "Based on the available tools and data, I'm encountering limitations in retrieving Apple's detailed risk factors from SEC filings. The systems show that Apple's most recent 10-K filing is available (filed October 31, 2025, covering fiscal year 2025), but the detailed prose sections including risk factors (Item 1A) are not currently accessible through the document retrieval tools I have available.\n\n**What I can tell you:**\n- Apple's most recent annual filing is the **10-K for fiscal year 2025** (filed October 31, 2025)\n- Financial metrics from that period show:\n  - Revenue: $416.16 billion\n  - Net Income: $112.01 billion\n  - Total Assets: $359.24 billion\n\n**To access Apple's specific risk factors, I recommend:**\n1. Visiting **SEC.gov/cgi-bin** and searching for AAPL 10-K filings\n2. Reviewing **Item 1A (Risk Factors)** in the most recent 10-K\n3. Checking Apple's investor relations website at investor.apple.com\n\nI apologize that I cannot provide the specific risk factor details you requested. Would you like me to help you with a different question about Apple, or would you like assistance with another company whose detailed filings are accessible?",
+      "latency_ms": 25212,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "BASE-SENTIMENT-001",
+      "question": "Were insiders buying or selling JPM stock this year?",
+      "category": "routing",
+      "expected_agents": [
+        "sentiment"
+      ],
+      "actual_agents": [
+        "sentiment"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "SentimentAgent": [
+          "get_insider_summary"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "**JPM insider activity, 2026 YTD (Jan 1 \u2013 Jun 21):**\n\n**Net signal: Insiders were selling.** There were **zero open-market purchases** but **42 open-market sales totaling $122.5M** across 12 insiders. This is a net selling position.\n\n**However, important context:** The vast majority of open-market insider sales are executed under pre-planned Rule 10b5-1 trading programs established months in advance. These do not necessarily reflect current insider views of the stock.\n\nSeparately, JPM insiders also had **22 tax withholding transactions (Type F) totaling $188.3M** \u2014 these are automatic share surrenders when restricted stock units vest to cover tax liability, and are excluded from the net signal as they are not discretionary sell decisions.\n\n**Bottom line:** While open-market selling outweighed buying this year, the selling volume alone is not a reliable bearish signal without knowing which executives executed pre-planned programs. For a more meaningful read, you'd want to know if there were any **open-market purchases (Type P)** \u2014 which there were none in this period \u2014 as those would be genuinely bullish.",
+      "latency_ms": 10110,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MARKET-MACRO-001",
+      "question": "What's the price of WTI crude oil?",
+      "category": "routing",
+      "expected_agents": [
+        "market",
+        "macro"
+      ],
+      "actual_agents": [
+        "market",
+        "macro"
+      ],
+      "expected_dag_shape": "parallel",
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_price_on_date"
+        ],
+        "MacroAgent": [
+          "get_indicator",
+          "get_indicator"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# WTI Crude Oil Price\n\nWTI crude oil has two distinct, complementary price readings available:\n\n**Futures Market Price (as of June 18, 2026):**\n- **$76.60/barrel** (closing price on the most recent trading day)\n- Range: $73.58\u2013$76.99\n\n**U.S. Government Spot Price (as of June 15, 2026):**\n- **$84.65/barrel** (latest official data point)\n\nThese represent different measures: the futures contract price (traded on exchanges) versus the government's official spot price index. The $8.05 difference between them reflects this distinction in methodology and timing rather than an inconsistency.\n\n**Recent Movement:**\nOver the past two weeks, WTI crude has declined significantly\u2014from nearly $100/barrel on June 3 to $84.65/barrel by June 15\u2014representing approximately a 15% pullback. This pullback typically reflects either softer global demand expectations or a reversal of prior supply concerns, though the specific driver is not specified in the available data.",
+      "latency_ms": 17752,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MARKET-MACRO-002",
+      "question": "How have oil futures performed this year?",
+      "category": "routing",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "Based on the data fetched from **January 1 to June 15, 2026** (weekly granularity):\n\n**Oil Futures (CL=F) Performance:**\n- **Start Price:** $57.32 (late December 2025)\n- **End Price:** $76.60 (June 15, 2026)\n- **Year-to-Date Change:** +33.6%\n- **High:** $119.48 (reached in early March)\n- **Low:** $55.76 (reached in early January)\n\nOil futures have had a strong performance so far in 2026, gaining approximately one-third in value. The data shows significant volatility, with a peak near $119 in March followed by a pullback. Oil settled around $76.60 by mid-June.",
+      "latency_ms": 8220,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MARKET-MACRO-003",
+      "question": "What's driving gas prices right now, and how does that relate to inflation?",
+      "category": "routing",
+      "expected_agents": [
+        "macro"
+      ],
+      "actual_agents": [
+        "macro"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "_unknown": [
+          "get_macro_snapshot",
+          "get_indicator"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "Based on the latest data, here's what's driving gas prices and the inflation connection:\n\n## **Crude Oil (WTI Spot Price)**\nWTI crude is currently around **$84.65/barrel** as of mid-June 2026, down notably from the elevated levels seen in late April-May ($105-106/barrel). This represents a **20% decline** over the past two months, signaling relief in energy markets.\n\n## **Inflation Status**\nAs of May 2026, the CPI (Consumer Price Index) stands at **333.98** (base 1982-84=100), representing core price levels in the economy. The Fed funds rate sits at **3.63%**, indicating the Fed has been moderately restrictive but not highly aggressive.\n\n## **The Connection:**\n\n1. **Oil as an inflation driver**: Crude oil is a major component of gasoline and heating costs. The recent **decline from $105 to $85/barrel** should reduce pump prices and ease near-term inflation pressures, especially in the energy and transportation segments of the CPI basket.\n\n2. **Current inflation regime**: With unemployment at **4.30%** and the Fed maintaining rates at 3.63%, inflation appears to be contained but not entirely licked. The recent softening in oil prices is a tailwind for the inflation fight.\n\n3. **What likely caused the oil dip**: The 20% drop over two months suggests either easing demand concerns, increased supply, or both\u2014possibly reflecting slowing economic growth or geopolitical de-escalation.\n\n**Bottom line**: Lower oil prices right now are working *in favor* of the inflation battle. If crude stabilizes in the $80-85 range, expect gasoline prices to reflect that decline, providing relief at the pump and helping keep headline inflation from re-accelerating.",
+      "latency_ms": 35536,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MARKET-MACRO-004",
+      "question": "Compare gold and oil performance over the last 6 months",
+      "category": "routing",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices_multi"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "## Gold vs Oil Performance (Last 6 Months)\n\n**Date Range:** December 22, 2025 \u2013 June 15, 2026 (weekly aggregation)\n\n### Gold (GC=F)\n- **Start Price:** $4,529.10\n- **End Price:** $4,224.10\n- **Change:** -6.7%\n- **High:** $5,586.20\n- **Low:** $4,031.00\n\n### Crude Oil (CL=F)\n- **Start Price:** $56.74\n- **End Price:** $76.60\n- **Change:** +35.0%\n- **High:** $119.48\n- **Low:** $55.76\n\n### Summary\n\nOver the last 6 months, **oil significantly outperformed gold**. Oil surged 35.0%, reaching a high of $119.48 per barrel, while gold declined 6.7%, dipping to as low as $4,031 per ounce. The divergence reflects different market dynamics\u2014oil benefited from supply concerns and demand recovery, while gold faced headwinds despite reaching elevated prices earlier in the period.",
+      "latency_ms": 9716,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MARKET-MACRO-005",
+      "question": "Is WTI crude oil expensive right now?",
+      "category": "routing",
+      "expected_agents": [
+        "market",
+        "macro"
+      ],
+      "actual_agents": [
+        "macro",
+        "market"
+      ],
+      "expected_dag_shape": "parallel",
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MacroAgent": [
+          "get_indicator"
+        ],
+        "MarketAgent": [
+          "get_price_on_date",
+          "get_prices"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# Is WTI Crude Oil Expensive Right Now?\n\n**Short answer:** WTI is at a **moderate price level**\u2014neither unusually high nor low\u2014though the two agents report slightly different current prices, reflecting typical data timing differences.\n\n## Current Price (with source note)\nThe agents report WTI at **$76.60\u2013$84.65 per barrel** as of mid-June 2026. The difference reflects slight variations in the exact reporting date (June 15 vs. June 18), not a data error.\n\n## Why \"Moderate\" Rather Than \"Expensive\"\n\n**Recent decline:** Both analyses note a **downward trend over the past two weeks**. The macro analysis explicitly reports WTI falling from ~$96/barrel at the start of June to $84.65 by June 15\u2014a meaningful pullback that suggests easing price pressure.\n\n**Year-to-date volatility:** Over the past 12 months (June 2025\u2013June 2026), WTI has ranged from a low of $54.98 to a high of $119.48. Current levels sit well below the March 2026 peak of $119.48, positioning crude as moderately priced in the context of recent extremes.\n\n**Historical perspective:** Both analyses characterize the current level as neither unusually elevated nor depressed relative to recent years.\n\n## Bottom Line\nAt current levels, WTI is not expensive in absolute or relative terms. Whether it feels expensive depends on your specific baseline\u2014it's up 16.9% year-over-year, but down significantly from the spike seen just weeks ago.",
+      "latency_ms": 17834,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MACRO-FILINGS-001",
+      "question": "What did the Fed say about inflation, and what was the actual CPI number?",
+      "category": "routing",
+      "expected_agents": [
+        "macro",
+        "filings"
+      ],
+      "actual_agents": [
+        "filings",
+        "macro"
+      ],
+      "expected_dag_shape": "parallel",
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "_unknown": [
+          "get_fed_communications",
+          "get_macro_snapshot"
+        ],
+        "MacroAgent": [
+          "get_indicator"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "## Fed Statement vs. Actual CPI: What We Know\n\n**The Fed's Most Recent Assessment (June 17, 2026):**\nThe FOMC stated that **\"inflation remains elevated relative to the Committee's 2 percent goal,\"** citing supply shocks in sectors including energy. The Committee reaffirmed its commitment to price stability while holding the federal funds rate steady at 3-1/2 to 3-3/4 percent.\n\n**The Actual CPI Data (as of May 1, 2026):**\n- **Index level:** 333.979 (base 1982-84 = 100)\n- **Year-over-year inflation rate:** Approximately **2.3%** based on the 5-month trend from January to May 2026\n\n**The Alignment:**\nBoth sources confirm that inflation, while moderating from earlier 2025 peaks, remains above the Fed's traditional 2% target. The Fed's characterization of inflation as \"elevated\" reflects this ongoing gap between the current ~2.3% reading and their 2% goal. The CPI data validates the Fed's concern: price growth has not yet reached the Committee's target, even as it has cooled from higher levels seen earlier in the year.",
+      "latency_ms": 19001,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MACRO-FILINGS-002",
+      "question": "What has the Fed said about inflation recently?",
+      "category": "routing",
+      "expected_agents": [
+        "filings"
+      ],
+      "actual_agents": [
+        "filings"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "_unknown": [
+          "get_fed_communications",
+          "get_fed_communications"
+        ],
+        "FilingsAgent": [
+          "get_fed_communications",
+          "semantic_search"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "You're absolutely right. Let me answer based strictly on what was actually retrieved.\n\n**Based on the FOMC Statement from June 17, 2026:**\n\nThe Fed's most recent official statement on inflation states:\n\n> \"Inflation remains elevated relative to the Committee's 2 percent goal, in part reflecting supply shocks that have driven price increases in certain sectors, including energy. The Committee will deliver price stability.\"\n\nThe Committee maintained the federal funds rate at 3-1/2 to 3-3/4 percent in support of its dual mandate.\n\n**From Fed Officials (Partial excerpts):**\n\nChristopher Waller spoke on May 22, 2026, addressing inflation. The semantic search returned partial excerpts showing:\n- He discussed \"one-time increase in prices\" and stated \"That appears to be the right call\"\n- He mentioned the Middle East conflict's potential impact on inflation\n\nHowever, the search results were truncated and did not return his full remarks.\n\n**April FOMC Minutes:**\n\nThe April 29, 2026 FOMC Minutes document was retrieved but the output was truncated in the tool results, so I cannot provide the Committee's detailed discussion of inflation from that meeting without the actual text.\n\n**What I can confirm:** As of June 17, 2026, the Fed views inflation as elevated due partly to supply shocks in energy and other sectors, and remains committed to price stability.",
+      "latency_ms": 40774,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MARKET-SENTIMENT-001",
+      "question": "Did AAPL's stock react to insider selling in Q1?",
+      "category": "routing",
+      "expected_agents": [
+        "market",
+        "sentiment"
+      ],
+      "actual_agents": [
+        "sentiment",
+        "market"
+      ],
+      "expected_dag_shape": "parallel",
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# AAPL Stock Performance and Insider Activity in Q1 2026\n\n## Key Findings\n\n**Stock Performance:** AAPL declined 8.9% in Q1 2026 (December 29, 2025 \u2013 March 30, 2026), falling from $270.51 to $246.40. The stock experienced a notable rally attempt in early February (peaking at $280.39) but entered a sustained downtrend through mid-March, stabilizing near $246\u2013$248 by quarter-end.\n\n**Insider Trading Activity:** The sentiment analysis agent did not return insider trade data for Q1 2026, citing ambiguity about the timeframe and requesting clarification on whether you meant Q1 2025, Q1 2026, or another period. As a result, **insider selling activity for this period could not be retrieved.**\n\n## What Can and Cannot Be Concluded\n\nThe market analysis agent explicitly noted that **price movement alone cannot establish causation** with insider selling\u2014doing so requires parallel data on insider trade timing, volume, and patterns, which was not provided in these responses.\n\nTo answer whether AAPL's stock reacted to insider selling in Q1, you would need:\n1. Confirmation of which Q1 timeframe (2025 vs. 2026)\n2. Actual insider trade data (names, dates, transaction sizes) for that period\n3. Comparative analysis of trade timing relative to the price movements documented above\n\nIf you can clarify the Q1 timeframe, the sentiment analysis agent can pull the insider activity data needed to assess potential correlation.",
+      "latency_ms": 14680,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-FILINGS-SENTIMENT-001",
+      "question": "What do insiders' trades suggest about AAPL, and what does their latest 10-K say about outlook?",
+      "category": "routing",
+      "expected_agents": [
+        "filings",
+        "sentiment"
+      ],
+      "actual_agents": [
+        "sentiment",
+        "filings"
+      ],
+      "expected_dag_shape": "parallel",
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "FilingsAgent": [
+          "get_prose",
+          "get_documents",
+          "semantic_search",
+          "get_prose"
+        ],
+        "SentimentAgent": [
+          "get_insider_summary"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# AAPL Insider Trades & 10-K Outlook: What the Data Shows\n\n## Insider Trading Signal (Last 90 Days)\n\n**Net selling with no offsetting purchases:**\n- **14 open-market sales** totaling ~$111.7M across 5 officers/directors\n- **Zero open-market purchases**\n- Additionally, insiders surrendered 156,306 shares (~$40.7M) in automatic tax withholding on RSU/PSU vesting\n\n**Critical context:** The sales are likely executed under pre-planned Rule 10b5-1 programs established months in advance, which means they do not reliably signal insiders' current views of the stock's near-term direction. Without disclosure of when those programs were originally established, the sales alone should not be interpreted as a bearish signal. The absence of any discretionary buying activity is notable, however.\n\n**Bottom line:** Insider sentiment reads as **neutral to slightly cautious**, pending clarity on the Rule 10b5-1 program establishment dates.\n\n---\n\n## 10-K Outlook\n\n**Data limitation:** The filing analysis agent was unable to retrieve the narrative sections of Apple's 10-K (Management Discussion & Analysis, risk factors, business outlook) from the SEC EDGAR system, despite confirming that Apple's most recent 10-Q was filed January 31, 2025 (covering through December 28, 2024).\n\nTo access Apple's forward-looking statements and management's stated outlook, you will need to:\n1. Visit the SEC EDGAR system directly and download Apple's latest 10-K or 10-Q\n2. Review Item 7 (MD&A) for strategy and forward-looking commentary, and Item 1A (Risk Factors) for challenges management identifies\n\n---\n\n## Summary\n\nInsider transactions show net selling with no discretionary buying, though this likely reflects pre-planned divestiture schedules rather than a current bearish view. Apple's official 10-K outlook is not available through this analysis and will require direct access to the SEC filing.",
+      "latency_ms": 32757,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "PAIR-MACRO-SENTIMENT-001",
+      "question": "Is unemployment affecting insider confidence in JPM?",
+      "category": "grounding",
+      "expected_agents": [
+        "macro",
+        "sentiment"
+      ],
+      "actual_agents": [
+        "macro",
+        "sentiment"
+      ],
+      "expected_dag_shape": "parallel",
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "_unknown": [
+          "get_macro_snapshot",
+          "get_indicator",
+          "get_insider_summary",
+          "get_news_summary"
+        ]
+      },
+      "grounding_pass": true,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# Is Unemployment Affecting Insider Confidence in JPM?\n\n**Short answer: There is no direct evidence that unemployment is driving JPM insider behavior, but the broader labor-market and sentiment backdrop creates conditions under which insiders might reasonably be cautious.**\n\n## The Insider Signal\n\nJPM insiders show **net selling of $67.3M over 90 days with zero open-market purchases**. This absence of bullish discretionary buying is the more meaningful signal than the sales themselves, which appear to be pre-planned Rule 10b5-1 programs rather than reactive trades. The lack of insider conviction\u2014no voluntary buying despite economic sensitivity\u2014suggests caution, but the data does not isolate unemployment as the specific concern driving this behavior.\n\n## The News Sentiment Signal\n\nRecent JPM coverage (past 30 days) shows **evenly split sentiment: 3 negative, 3 neutral, 3 positive articles** (n=9). No dominant directional signal emerges from news coverage, meaning recent reporting has not amplified or focused market attention on any particular risk, including labor-market concerns.\n\n## The Macroeconomic Context\n\nTwo labor-market indicators set the environment:\n\n- **Unemployment Rate: 4.30%** (May 2026)\u2014historically moderate, not recessionary, but elevated enough to signal cooling.\n- **Consumer Sentiment Index: 49.8** (April 2026)\u2014notably deteriorated from 56.4 in January, crossing below 50 to signal consumer pessimism.\n\nThe macro analysis explicitly notes that this divergence (stable-but-moderate unemployment paired with sharply declining sentiment) creates boardroom uncertainty at a bank like JPM: forward-looking concern about loan portfolio health, deposit stability, and net interest margins, even absent an imminent contraction.\n\n## Integration\n\nInsider trading data shows muted confidence (no buying), macro conditions show building uncertainty (sentiment down 6.6 points in 4 months), and recent news offers no clarity either way. The insiders' caution aligns with the macro backdrop of weakening sentiment despite moderate unemployment\u2014a pattern that historically reflects fear of *future* job losses rather than current joblessness. However, the insider trade data alone does not confirm unemployment is the named concern; the macro context merely establishes that insiders at a major bank would reasonably factor labor-market trajectory into their confidence calculus.",
+      "latency_ms": 24272,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "SEQ-FILINGS-MARKET-001",
+      "question": "How did the stock react to the SVB collapse?",
+      "category": "routing",
+      "expected_agents": [
+        "filings",
+        "market"
+      ],
+      "actual_agents": [
+        "macro",
+        "market"
+      ],
+      "expected_dag_shape": "sequential",
+      "actual_dag_shape": "sequential",
+      "routing_pass": false,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MacroAgent": [
+          "get_macro_snapshot"
+        ],
+        "MarketAgent": [
+          "get_prices_multi",
+          "get_prices"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# Stock Market Reaction to the SVB Collapse (March 10, 2023)\n\n## The Core Pattern: Bifurcated Shock and Recovery\n\nThe stock market reacted to SVB's collapse with a **sharp initial shock followed by rapid, differentiated recovery**\u2014driven by a clear rotation away from banks and toward mega-cap tech.\n\n### Immediate Shock (March 10\u201313)\n\n**Banks bore the brunt of losses:**\n- **Bank of America (BAC)** crashed **\u201318.2%** over the two-week window, hitting a low of $25.42 by March 13\n- **JPMorgan (JPM)** fell **\u201310.8%**, closing March 10 at $123.85 (down from $132.10 at the start of the period)\n\nThis reflected acute depositor panic and regulatory uncertainty in the banking sector following SVB's failure.\n\n### Rapid Pivot to Mega-Cap Tech (March 10\u201317)\n\nIn sharp contrast, large-cap technology stocks surged as investors fled to perceived safety:\n- **MSFT:** +10.5% (from $242.31 on March 10 to $269+ by March 16\u201317)\n- **GOOGL:** +12.0% (bottomed at $89.83 on March 10, rallied to $100.73 by March 17)\n- **NVDA:** +14.1% (highly resilient; briefly dipped to $22.92 on SVB day, then recovered steadily)\n- **META:** +14.1% (dropped to $177.95 on March 10, then surged to $203.97 by March 16)\n\n**Other outcomes:**\n- **AAPL:** +8.3% (dipped to $146.24 on March 10, recovered by March 14+)\n- **AMZN:** +6.0% (weakest tech performer; fell to $90.73 on SVB day)\n- **TSLA:** \u20139.6% (outlier; declined sharply around SVB collapse)\n\n### Market Stress Backdrop\n\nThe collapse unfolded against a **challenging macroeconomic backdrop**:\n- **Fed Funds Rate: 4.65%** \u2014 aggressive rate hikes had compressed bank profit margins and triggered mark-to-market losses on held-to-maturity bond portfolios\n- **Inverted yield curve:** 2-year Treasury (4.60%) > 10-year Treasury (3.70%), a recession warning signal\n- **VIX: 24.8** \u2014 elevated volatility reflecting market fear\n\nThe macro context\u2014rapid rate hikes combined with deposit outflows from tech-sector clients\u2014directly created the systemic stress that triggered SVB's failure. Once the market shock hit, the immediate stock reaction showed investors rotating out of banks into large, profitable tech franchises perceived as safer havens.",
+      "latency_ms": 57910,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "TOOL-MARKET-001",
+      "question": "Compare AAPL and MSFT performance this year",
+      "category": "tool_selection",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": true,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices_multi"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "## AAPL vs MSFT Performance Comparison - 2026 YTD\n\n**Data Range:** December 29, 2025 \u2013 June 15, 2026 (Weekly granularity)\n\n### AAPL Performance:\n- **Start Price:** $270.51\n- **End Price:** $298.01\n- **Return:** +10.2%\n- **High:** $317.40\n- **Low:** $242.97\n\n### MSFT Performance:\n- **Start Price:** $470.84\n- **End Price:** $379.40\n- **Return:** -19.4%\n- **High:** $487.53\n- **Low:** $355.51\n\n### Summary:\n**AAPL has significantly outperformed MSFT in 2026 to date.** AAPL is up 10.2% while MSFT is down 19.4%, representing a **29.6 percentage point performance gap** in AAPL's favor. AAPL showed steady upward momentum, particularly from April onward, while MSFT experienced a sharp decline in early 2026 with some recovery mid-year before another pullback in June.",
+      "latency_ms": 9374,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "TOOL-FILINGS-001",
+      "question": "What are JPMorgan's risk factors and what does their MD&A say?",
+      "category": "tool_selection",
+      "expected_agents": [
+        "filings"
+      ],
+      "actual_agents": [
+        "filings"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": true,
+      "actual_tools_by_agent": {
+        "FilingsAgent": [
+          "get_prose",
+          "get_documents"
+        ],
+        "_unknown": [
+          "semantic_search",
+          "semantic_search"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "I apologize, but it appears that **JPMorgan (JPM) filings are not currently available** in my document database. \n\nAccording to my available resources, I can access SEC filings for these companies:\n- **AAPL** (Apple)\n- **MSFT** (Microsoft)\n- **GOOGL** (Google)\n- **AMZN** (Amazon)\n- **BAC** (Bank of America)\n- **XOM** (ExxonMobil)\n\nJPM documents appear to be in the system according to the initial tool list, but are not returning results. This could be a data availability issue.\n\n**Would you like me to:**\n1. Fetch risk factors and MD&A for **BAC (Bank of America)** instead, as another major financial institution?\n2. Fetch this information for one of the other available companies (AAPL, MSFT, GOOGL, AMZN, XOM)?\n\nPlease let me know which company you'd prefer to analyze.",
+      "latency_ms": 17148,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "TOOL-MARKET-002",
+      "question": "Which energy companies do we track, and how have they performed this year?",
+      "category": "tool_selection",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": true,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_companies_in_sector",
+          "get_prices_multi"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "## Energy Companies We Track & 2026 Performance\n\nWe track **2 major energy companies**:\n\n### Performance Year-to-Date (Jan 1 \u2013 Jun 15, 2026)\n\n**1. ExxonMobil (XOM)**\n- **Start Price:** $121.02\n- **End Price:** $137.81\n- **Change:** +13.9%\n- **High:** $175.22\n- **Low:** $116.69\n\n**2. Chevron (CVX)**\n- **Start Price:** $152.99\n- **End Price:** $173.63\n- **Change:** +13.5%\n- **High:** $212.76\n- **Low:** $148.43\n\n### Summary\nBoth energy companies have delivered strong positive returns this year, with XOM slightly outperforming CVX by 40 basis points. The data is aggregated on a weekly basis covering the period from December 29, 2025 through June 15, 2026, showing both companies traded near their highs in late March before pulling back modestly in April-May.",
+      "latency_ms": 13370,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "GROUND-MARKET-001",
+      "question": "Why did oil prices spike in March?",
+      "category": "grounding",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "macro",
+        "filings"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "parallel",
+      "routing_pass": false,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MacroAgent": [
+          "get_indicator"
+        ]
+      },
+      "grounding_pass": true,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# Oil Price Spike in March 2026\n\n**Clarification on timeframe:** You're asking about March 2026, the most recent occurrence with available data.\n\n## What Happened: The Price Movement\n\nWTI crude oil prices rose sharply over four weeks in March 2026:\n\n- **Late February baseline:** ~$65\u201366/barrel\n- **Early March (March 2):** $78.37/barrel \u2014 a ~$13 jump in one week\n- **Peak (March 16):** $96.07/barrel \u2014 a sustained ~60% rally from late February\n- **Month-end (March 31):** $103.78/barrel\n\nThis represents a dramatic and sustained climb across the month.\n\n## What Caused It: The Gap\n\n**The macro data confirms the magnitude and timing of the spike, but does not identify its underlying drivers.** The causes\u2014whether geopolitical disruptions, supply constraints, demand shifts, refinery outages, or other catalysts\u2014are not captured in the economic indicators available through my current data sources.\n\nTo answer the \"why\" behind this March 2026 surge would require input from energy market specialists, geopolitical analysts, or contemporaneous reporting on specific events (e.g., production disruptions, sanctions, OPEC actions, or regional instability) that occurred in that period. **SEC filings from energy companies filed after March could potentially contain management commentary on market conditions, but those would be secondary reflections rather than primary event documentation.**\n\nIf you can provide additional context about what events occurred in March 2026, or if you'd like me to pull energy company filings from that period, I can help connect those sources to the price movement.",
+      "latency_ms": 19490,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "GROUND-SENTIMENT-001",
+      "question": "Were JPM executives selling because they lost confidence in the company this quarter?",
+      "category": "grounding",
+      "expected_agents": [
+        "sentiment"
+      ],
+      "actual_agents": [
+        "sentiment",
+        "filings"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "parallel",
+      "routing_pass": false,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "_unknown": [
+          "get_insider_summary",
+          "get_news_summary",
+          "get_documents",
+          "semantic_search",
+          "semantic_search",
+          "get_documents",
+          "get_prose"
+        ],
+        "FilingsAgent": [
+          "semantic_search",
+          "get_prose",
+          "semantic_search"
+        ]
+      },
+      "grounding_pass": false,
+      "forbidden_phrase_hits": [
+        "lost confidence"
+      ],
+      "planner_reasoning": null,
+      "final_answer": "# Did JPM Executives Lose Confidence This Quarter?\n\n**Short answer: No evidence of lost confidence.**\n\n## What the data shows:\n\n**Insider trading activity** (Q2 2026, March\u2013June):\n- JPM insiders executed **$67.3M in net open-market sales** across 17 transactions, with **zero open-market purchases**.\n- However, these sales carry minimal signal value: most are pre-planned Rule 10b5-1 programs established months in advance and do not reflect current insider views. Additionally, **$134.4M in automatic tax-withholding transactions** on RSU vesting occurred\u2014these are forced share surrenders tied to equity compensation, not discretionary selling decisions.\n- The more meaningful absence is **lack of discretionary buying** rather than the presence of programmed sales. Without heavy selling paired with negative news, absence of buying alone does not indicate lost confidence.\n\n**News sentiment** (Q2 2026):\n- 44 articles classified as **24 neutral (55%), 13 positive (30%), and 7 negative (16%)**.\n- Overall tone tilted neutral-to-positive, not bearish.\n\n**Financial results** (Q1 2026):\n- Net income: $16.49B; Total assets: $4.9T; Stockholders' equity: $364B.\n- *(Note: Qualitative commentary from management's discussion & analysis sections of the 10-Q filing was not successfully retrieved, so no direct management statements about company outlook are available to assess confidence independently.)*\n\n## Conclusion:\n\nThe combination of routine programmed insider sales, zero discretionary purchases, and constructive news sentiment provides **no signal of executive loss of confidence**. Routine quarterly insider selling absent other red flags is a normal pattern and does not indicate deteriorating internal views of the company.",
+      "latency_ms": 67018,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "GROUND-MACRO-SENTIMENT-001",
+      "question": "How confident are JPM employees about the company?",
+      "category": "grounding",
+      "expected_agents": [
+        "sentiment"
+      ],
+      "actual_agents": [
+        "sentiment"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "SentimentAgent": [
+          "get_insider_summary"
+        ]
+      },
+      "grounding_pass": true,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "**Last 90 days (2026-03-21 \u2192 2026-06-21)**\n\n**Insider trading signal:**\n\nJPM insiders show **net selling** of $67.3 million over the past 90 days. Specifically:\n- **17 open-market sales** by 10 insiders: 220,202 shares sold for $67.3 million\n- **0 open-market purchases** \n- **11 RSU tax withholding events** (automatic, not sell decisions): 455,599 shares\n\nThe lack of any discretionary open-market purchases is notable \u2014 no JPM employees bought stock on the open market during this period. The selling appears to be systematic rather than concentrated.\n\n**Key caveat:** The selling signal is weaker than it appears because most executive sales are executed under pre-planned Rule 10b5-1 programs established months earlier. These programs run on schedule regardless of near-term views, so high S volume alone is not a reliable bearish indicator. However, the *complete absence of purchases* during a 90-day period does suggest insiders are not rushing to buy on the open market, which is mildly cautious.\n\n**Overall read:** JPM insiders are not demonstrating strong confidence through discretionary purchases. The activity is dominated by pre-planned sales and automatic RSU tax withholding, which is routine for large financial institutions. The absence of buying is the more meaningful signal here.",
+      "latency_ms": 8294,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "GROUND-DATERANGE-001",
+      "question": "What was AAPL's stock price on January 1, 2015?",
+      "category": "grounding",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_price_on_date"
+        ]
+      },
+      "grounding_pass": true,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "I'm unable to retrieve AAPL's stock price for January 1, 2015. According to the system, market price data is only available from 2020-01-01 onward. January 1, 2015 falls outside the available historical data range.\n\nIf you'd like to check AAPL's price on a date from 2020 onward, I'd be happy to help with that.",
+      "latency_ms": 7203,
+      "error": null
+    },
+    {
+      "run_id": "2026-06-21T11-59-05",
+      "question_id": "GROUND-SYNTHESIS-001",
+      "question": "What's the price of WTI crude oil?",
+      "category": "grounding",
+      "expected_agents": [
+        "market",
+        "macro"
+      ],
+      "actual_agents": [
+        "market",
+        "macro"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_price_on_date"
+        ],
+        "MacroAgent": [
+          "get_indicator"
+        ]
+      },
+      "grounding_pass": true,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# WTI Crude Oil Price\n\nWTI crude oil is trading at two distinct price points depending on the market instrument:\n\n**Futures Price (June 18, 2026):**\n- **$76.60 per barrel** (closing price on the most recent trading day)\n- Range: $73.58\u2013$76.99\n\n**Spot Price (June 15, 2026):**\n- **$84.65 per barrel** (official U.S. government spot price for immediate delivery)\n\nThe $8.05 difference between these figures reflects two separate but valid measurements: the futures contract price (which reflects expected future delivery prices and is updated daily in active trading) versus the official spot price index (which represents the price for immediate physical delivery). The spot price data is three trading days older than the futures close, which may also account for part of the variance.",
+      "latency_ms": 10310,
+      "error": null
+    }
+  ]
+}

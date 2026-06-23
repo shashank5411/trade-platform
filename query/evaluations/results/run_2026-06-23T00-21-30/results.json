@@ -1,0 +1,86 @@
+{
+  "summary": {
+    "run_id": "2026-06-23T00-21-30",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "routing": "0/1"
+    },
+    "total_passed": 0,
+    "total_input_tokens": 19559,
+    "total_output_tokens": 2314,
+    "estimated_total_cost_usd": 0.0311,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": [
+      {
+        "id": "MERGE-MACRO-SENTIMENT-MARKET-002",
+        "category": "routing",
+        "reason": "routing mismatch (expected ['macro', 'sentiment', 'market'], got ['macro', 'market', 'sentiment'])"
+      }
+    ]
+  },
+  "results": [
+    {
+      "run_id": "2026-06-23T00-21-30",
+      "question_id": "MERGE-MACRO-SENTIMENT-MARKET-002",
+      "question": "Unemployment is rising and JPM insiders are selling \u2014 does JPM's stock price actually justify that level of pessimism, or is the market pricing in something different?",
+      "category": "routing",
+      "expected_agents": [
+        "macro",
+        "sentiment",
+        "market"
+      ],
+      "actual_agents": [
+        "macro_1",
+        "sentiment_1",
+        "market_1"
+      ],
+      "actual_agent_types": [
+        "macro",
+        "market",
+        "sentiment"
+      ],
+      "expected_dag_shape": "sequential",
+      "actual_dag_shape": "parallel",
+      "routing_pass": false,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MacroAgent": [
+          "get_macro_snapshot",
+          "get_indicator"
+        ],
+        "MarketAgent": [
+          "get_prices",
+          "get_prices",
+          "get_prices_multi"
+        ],
+        "SentimentAgent": [
+          "get_insider_summary",
+          "get_news_summary"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# JPM Stock Price vs. Unemployment and Insider Selling: What the Data Shows\n\n## The Core Disconnect\n\nJPM's stock price and public market narrative are **not pricing in acute pessimism**, despite the insider selling signal you flagged. Here's what each data stream shows:\n\n### Stock Price: Modest, Not Distressed\nJPM is up **+0.9% year-to-date (Jan\u2013Jun 2026)** and **+15.5% over the past 12 months**, trading within a $277\u2013$338 range in 2026. The stock experienced material volatility\u2014a ~14% drawdown in early March followed by recovery\u2014but has not collapsed to distressed levels. This modest YTD performance underperforms typical broad market expectations but does not reflect extreme pessimism.\n\n### Unemployment: Stable, Not Rising into Alarm Territory\nCurrent unemployment stands at **4.3% as of May 2026**, having oscillated within a tight **4.3\u20134.5% band** over the past year. The macro analysis explicitly notes this is \"not alarming on a historical basis\" and that markets (based on the 29 bps 10yr/2yr spread) aren't pricing in imminent recession. If unemployment is \"rising,\" it's movement within a healthy range, not sustained deterioration toward 5%+.\n\n### Public Sentiment: Neutral-to-Positive, Not Alarmed\nMedia coverage of JPM over the past 90 days breaks down as:\n- **55% neutral**\n- **30% positive**\n- **16% negative**\n\nThis suggests cautious acceptance rather than widespread concern about JPM's outlook.\n\n---\n\n## The Insider Selling Signal: Real But Mechanically Driven\n\nJPM insiders have executed **$67.2M in net open-market sales over the past 90 days with zero discretionary purchases**. This is a genuine bearish signal in isolation\u2014notably, it includes **11 automatic RSU tax withholding events** ($134.4M) that are mechanical, not decision-driven.\n\nThe analysis flags that most sales are \"likely pre-planned Rule 10b5-1 programs established months ago, not reactive decisions to current conditions.\" However, the **absence of any offsetting insider purchases** does indicate insiders aren't seeing current prices as attractive enough to buy.\n\n---\n\n## What This Means: Three Independent Signals\n\n**Signal 1 (Macro):** Unemployment is stable within a healthy band; no recession signal in bond spreads.\n\n**Signal 2 (Stock Price):** JPM has repriced downward intra-year but remains in a constrained trading range\u2014not distressed valuation.\n\n**Signal 3 (Insider Activity + Public Sentiment):** Insiders are net selling (likely mechanically) with no offsetting purchases. Simultaneously, public discourse remains 55% neutral and 30% positive.\n\n---\n\n## The Answer to Your Question\n\n**JPM's stock price does not appear to be pricing in the level of pessimism you might expect from rising unemployment + insider selling combined.** Here's why:\n\n1. **Unemployment isn't actually rising meaningfully** \u2014 it's stable at 4.3%, within a normal range that doesn't signal economic distress.\n\n2. **Stock price reflects modest repricing, not panic.** The YTD gain of +0.9% and the stable 12-month trading range ($277\u2013$338) suggest the market has adjusted downward but hasn't priced in a severe credit or earnings shock.\n\n3. **Public market discourse hasn't turned negative** \u2014 85% of recent coverage is neutral or positive, suggesting Wall Street analysts and media haven't yet incorporated alarm about JPM's fundamentals.\n\n4. **The insider selling signal is real but ambiguous.** It's unambiguously net selling with zero purchases, but it's largely mechanical (RSU withholding + pre-planned programs). The lack of discretionary buying is mildly concerning, but it's not necessarily a forward-looking warning \u2014 it could simply reflect that vesting schedules and tax management drove the sales, not updated views on JPM's prospects.\n\n**Bottom line:** Either the market is rationally assessing that JPM-specific headwinds (credit cycle, net interest margin, loan loss provisions) don't justify deeper pessimism given the macro backdrop, or insiders are aware of deterioration that hasn't yet showed up in either stock price or public sentiment. The data as reported doesn't settle which scenario is true \u2014 only that the three signals (macro stability, modest stock repricing, and mixed insider/sentiment signals) are not yet aligned on consensus pessimism.",
+      "tokens_by_node": {
+        "market_1": {
+          "input_tokens": 11929,
+          "output_tokens": 887
+        },
+        "macro_1": {
+          "input_tokens": 6079,
+          "output_tokens": 630
+        },
+        "sentiment_1": {
+          "input_tokens": 1551,
+          "output_tokens": 797
+        }
+      },
+      "total_input_tokens": 19559,
+      "total_output_tokens": 2314,
+      "estimated_cost_usd": 0.03113,
+      "latency_ms": 51738,
+      "error": null
+    }
+  ]
+}

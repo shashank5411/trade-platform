@@ -271,12 +271,14 @@ TOOLS = [
         "name": "get_indicator",
         "description": (
             "Fetch a SINGLE economic indicator series over a DATE RANGE. "
-            "Auto-selects granularity respecting native data frequency: "
-            "daily series (DGS10, DGS2): ≤30d→daily, ≤365d→weekly, >365d→monthly. "
+           "Auto-selects granularity respecting native data frequency: "
+            "daily series (DGS10, DGS2, DCOILWTICO): ≤30d→daily, ≤365d→weekly, >365d→monthly. "
             "monthly series (UNRATE, FEDFUNDS, CPI): ≤730d→monthly, >730d→quarterly. "
             "annual series (World Bank): always annual. "
             "FRED series IDs: FEDFUNDS, UNRATE, CPIAUCSL, DGS10, DGS2, "
-            "GDP, M2SL, UMCSENT, HOUST, INDPRO. "
+            "GDP, M2SL, UMCSENT, HOUST, INDPRO, DCOILWTICO (WTI crude oil "
+            "SPOT price, $/barrel — distinct from futures/contract price, "
+            "which lives in get_prices via ticker CL=F). "
             "World Bank IDs (use dot notation): NY.GDP.MKTP.CD, "
             "FP.CPI.TOTL.ZG, SP.POP.TOTL, NY.GDP.PCAP.CD, NE.TRD.GNFS.ZS. "
             "For MULTIPLE series use get_indicator_multi. "

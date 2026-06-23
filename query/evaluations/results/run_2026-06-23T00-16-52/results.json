@@ -1,0 +1,78 @@
+{
+  "summary": {
+    "run_id": "2026-06-23T00-16-52",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "grounding": "0/1"
+    },
+    "total_passed": 0,
+    "total_input_tokens": 7044,
+    "total_output_tokens": 1904,
+    "estimated_total_cost_usd": 0.0166,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": [
+      {
+        "id": "GROUND-SENTIMENT-001",
+        "category": "grounding",
+        "reason": "routing mismatch (expected ['sentiment'], got ['filings', 'sentiment']); grounding failure: ['lost confidence']"
+      }
+    ]
+  },
+  "results": [
+    {
+      "run_id": "2026-06-23T00-16-52",
+      "question_id": "GROUND-SENTIMENT-001",
+      "question": "Were JPM executives selling because they lost confidence in the company this quarter?",
+      "category": "grounding",
+      "expected_agents": [
+        "sentiment"
+      ],
+      "actual_agents": [
+        "sentiment_1",
+        "filings_1"
+      ],
+      "actual_agent_types": [
+        "filings",
+        "sentiment"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "parallel",
+      "routing_pass": false,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "SentimentAgent": [
+          "get_insider_summary",
+          "get_news_summary"
+        ],
+        "FilingsAgent": [
+          "get_documents",
+          "semantic_search",
+          "get_prose",
+          "get_prose",
+          "semantic_search"
+        ]
+      },
+      "grounding_pass": false,
+      "forbidden_phrase_hits": [
+        "lost confidence"
+      ],
+      "planner_reasoning": null,
+      "final_answer": "# Did JPM Executives Lose Confidence? The Data Does Not Support That Conclusion\n\n**Bottom line:** The available evidence does not point to executives abandoning JPMorgan due to lost confidence this quarter. Insider selling occurred, but the data suggests it was routine and pre-planned rather than a flight from the company.\n\n## Insider Trading Signal\n\nExecutives conducted $67.2M in net open-market *selling* across 16 transactions by 9 insiders in Q2 2026. However, this selling appears to reflect standard portfolio management, not a confidence collapse:\n\n- **Selling likely pre-planned:** These transactions almost certainly stem from Rule 10b5-1 programs established months in advance\u2014automatic execution of pre-set plans, not discretionary decisions made in response to recent quarter conditions.\n- **No bullish counter-signal:** Crucially, zero open-market *purchases* occurred this quarter. If executives had lost confidence but wanted to signal it, the absence of buying is notable; conversely, if they had *recovered* confidence, we would expect to see them *buying*\u2014and we did not.\n- **Mechanical transactions separately:** $134.4M in tax withholding transactions (automatic RSU vesting surrenders) are not sell signals; they are mechanical equity events.\n\nThe insider data does not show a confidence collapse.\n\n## News Environment\n\nMedia coverage was mixed-to-neutral. Polygon classified 44 articles: 13 positive, 24 neutral, and 7 negative (16% negative coverage). All articles came from Benzinga, a tier-2 financial media outlet. The dominant tone was neutral rather than crisis-oriented or uniformly negative. This environment is consistent with routine business coverage, not a narrative of deteriorating company health.\n\n## Data Gaps\n\nJPMorgan's Q2 2026 10-Q filing is not yet available in the SEC filings system (as of June 23, 2026). This filing would normally contain detailed insider transaction disclosures and management commentary on company outlook. Its absence limits ability to cross-check insider selling against explicit management statements about confidence or forward guidance.\n\n---\n\n**Conclusion:** Pre-planned executive selling combined with neutral media coverage and zero offsetting insider purchases does not constitute evidence of lost confidence. The signal is neutral-to-routine, not bearish.",
+      "tokens_by_node": {
+        "sentiment_1": {
+          "input_tokens": 1496,
+          "output_tokens": 555
+        },
+        "filings_1": {
+          "input_tokens": 5548,
+          "output_tokens": 1349
+        }
+      },
+      "total_input_tokens": 7044,
+      "total_output_tokens": 1904,
+      "estimated_cost_usd": 0.01656,
+      "latency_ms": 39853,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,522 @@
+# Eval question set — trade-platform DAG planner / agent system.
+#
+# Schema per entry:
+#   id                 — stable identifier, never reused even after retirement
+#   question           — exact prompt sent to query/agent.py
+#   category           — routing | tool_selection | grounding
+#   expected_agents    — list of agent names the DAG should contain (order-independent)
+#   expected_dag_shape — parallel | sequential | single  (parallel = empty depends_on for all;
+#                        sequential = at least one agent depends_on another)
+#   expected_tools     — optional, only meaningfully checked for tool_selection category
+#   expected_answer_contains — optional, only used for grounding category (substring/keyword
+#                        the judge checks is present; absence of forbidden phrases is checked
+#                        separately via forbidden_phrases)
+#   forbidden_phrases  — optional, phrases that must NOT appear in the final answer
+#                        (used for grounding tests that catch overreach, e.g. causal language)
+#   source_tags        — which underlying data sources this question exercises; used to
+#                        find/extend coverage when a new source is added, never read by
+#                        the runner's scoring logic itself
+#   status             — active | retired
+#   added_date / added_reason
+#   retired_date / retired_reason — null until retired
+
+questions:
+
+  # ── Single-agent baselines ────────────────────────────────────────────────
+
+  - id: BASE-MARKET-001
+    question: "How did AAPL perform over the last 6 months?"
+    category: routing
+    expected_agents: [market]
+    expected_dag_shape: single
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Single-agent baseline — clean price/performance question, no ambiguity"
+    retired_date: null
+    retired_reason: null
+
+  - id: BASE-MACRO-001
+    question: "What was the unemployment rate in 2023?"
+    category: routing
+    expected_agents: [macro]
+    expected_dag_shape: single
+    source_tags: [fred]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Single-agent baseline — clean indicator question, no ambiguity"
+    retired_date: null
+    retired_reason: null
+
+  - id: BASE-FILINGS-001
+    question: "What are Apple's main risk factors?"
+    category: routing
+    expected_agents: [filings]
+    expected_dag_shape: single
+    source_tags: [sec_edgar]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Single-agent baseline — clean filings question, no ambiguity"
+    retired_date: null
+    retired_reason: null
+
+  - id: BASE-SENTIMENT-001
+    question: "Were insiders buying or selling JPM stock this year?"
+    category: routing
+    expected_agents: [sentiment]
+    expected_dag_shape: single
+    source_tags: [sec_form4]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Single-agent baseline — clean insider trades question, no ambiguity"
+    retired_date: null
+    retired_reason: null
+
+  # ── Pair: market + macro (commodity disambiguation) ───────────────────────
+
+  - id: PAIR-MARKET-MACRO-001
+    question: "What's the price of WTI crude oil?"
+    category: routing
+    expected_agents: [market, macro]
+    expected_dag_shape: parallel
+    source_tags: [yfinance, fred]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Original WTI routing-ambiguity bug — no framing means genuinely ambiguous between futures and spot price, should route to both"
+    retired_date: null
+    retired_reason: null
+
+  - id: PAIR-MARKET-MACRO-002
+    question: "How have oil futures performed this year?"
+    category: routing
+    expected_agents: [market]
+    expected_dag_shape: single
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Regression guard — explicit 'futures' framing should route to market only, not the ambiguous pair"
+    retired_date: null
+    retired_reason: null
+
+  - id: PAIR-MARKET-MACRO-003
+    question: "What's driving gas prices right now, and how does that relate to inflation?"
+    category: routing
+    expected_agents: [macro]
+    expected_dag_shape: single
+    source_tags: [fred]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Regression guard — spot/economic-indicator framing should route to macro only, not the ambiguous pair"
+    retired_date: null
+    retired_reason: null
+
+  - id: PAIR-MARKET-MACRO-004
+    question: "Compare gold and oil performance over the last 6 months"
+    category: routing
+    expected_agents: [market]
+    expected_dag_shape: single
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "False-ambiguity regression guard — pure trading/performance framing across commodities should stay market-only; confirms Rule 4 doesn't over-trigger macro for every commodity mention. Also confirms gold/silver/nat-gas (no FRED spot series in toolset) never falsely trigger the ambiguous pair the way oil does."
+    retired_date: null
+    retired_reason: null
+
+  - id: PAIR-MARKET-MACRO-005
+    question: "Is WTI crude oil expensive right now?"
+    category: routing
+    expected_agents: [market, macro]
+    expected_dag_shape: parallel
+    source_tags: [yfinance, fred]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Phrasing-drift check on Rule 4 — no 'price' keyword at all, tests whether the ambiguous-case trigger is robust to wording rather than keyword-matching 'price of'"
+    retired_date: null
+    retired_reason: null
+
+  # ── Pair: macro + filings (Fed said + rate data) ──────────────────────────
+
+  - id: PAIR-MACRO-FILINGS-001
+    question: "What did the Fed say about inflation, and what was the actual CPI number?"
+    category: routing
+    expected_agents: [macro, filings]
+    expected_dag_shape: parallel
+    source_tags: [fed_speak, fred]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Explicit planner rule — Fed communications + rate/inflation data should parallel-route, not pick one over the other"
+    retired_date: null
+    retired_reason: null
+
+  - id: PAIR-MACRO-FILINGS-002
+    question: "What has the Fed said about inflation recently?"
+    category: routing
+    expected_agents: [filings]
+    expected_dag_shape: single
+    source_tags: [fed_speak]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Regression guard — pure Fed-communications framing should stay filings-only; confirms rule renumbering during the WTI/macro+sentiment fixes didn't break the original pattern this whole rule family was modeled on"
+    retired_date: null
+    retired_reason: null
+
+  # ── Pair: market + sentiment (price reaction to insider/news signal) ─────
+
+  - id: PAIR-MARKET-SENTIMENT-001
+    question: "Did AAPL's stock react to insider selling in Q1?"
+    category: routing
+    expected_agents: [market, sentiment]
+    expected_dag_shape: parallel
+    source_tags: [yfinance, sec_form4]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Explicit planner rule — sentiment + market should run in parallel with no dependency, since correlation framing doesn't require sequencing"
+    retired_date: null
+    retired_reason: null
+
+  # ── Pair: filings + sentiment (insider/news + SEC content) ───────────────
+
+  - id: PAIR-FILINGS-SENTIMENT-001
+    question: "What do insiders' trades suggest about AAPL, and what does their latest 10-K say about outlook?"
+    category: routing
+    expected_agents: [filings, sentiment]
+    expected_dag_shape: parallel
+    source_tags: [sec_form4, sec_edgar]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Explicit planner rule — sentiment + filings parallel pairing"
+    retired_date: null
+    retired_reason: null
+
+  # ── Pair: macro + sentiment (newly added rule, found while building this matrix) ──
+
+  - id: PAIR-MACRO-SENTIMENT-001
+    question: "Is unemployment affecting insider confidence in JPM?"
+    category: grounding
+    expected_agents: [macro, sentiment]
+    expected_dag_shape: parallel
+    forbidden_phrases:
+      - "could translate into"
+      - "portends"
+      - "suggests management is anticipating"
+      - "likely matters more"
+      - "being prudent rather than bullish"
+    source_tags: [fred, sec_form4]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Found a real planner gap (no rule existed for this pair) while building the coverage matrix. After adding the rule, also exposed a synthesis-layer bug where independent macro+sentiment signals were given an invented causal narrative. Fixed in two passes — this question stays in the grounding layer specifically to catch any regression of the causal-overreach behavior, not just the routing."
+    retired_date: null
+    retired_reason: null
+
+  # ── Sequential dependency pattern ──────────────────────────────────────────
+
+  - id: SEQ-FILINGS-MARKET-001
+    question: "How did the stock react to the SVB collapse?"
+    category: routing
+    expected_agents: [filings, market]
+    expected_dag_shape: sequential
+    source_tags: [wikipedia, yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Tests the dependency DIRECTION, not just which agents appear — filings should supply event context before market measures the reaction, not run in parallel with it"
+    retired_date: null
+    retired_reason: null
+
+  # ── Multi-hop chains (A -> B -> C propagation) ─────────────────────────────
+
+  - id: CHAIN-MACRO-MARKET-MARKET-001
+    question: "How were macro conditions in January 2026, and how did that impact crude prices, and what implications did that have on petroleum stocks?"
+    category: grounding
+    expected_agents: [macro, market]
+    expected_dag_shape: sequential
+    expected_answer_contains: "from prior step"
+    source_tags: [fred, yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "First multi-hop chain test (3 stages: macro_1 -> market_1 -> market_2). Found and fixed two real bugs in sequence: (1) downstream agents were restating upstream figures as their own verified findings — fixed via mandatory [from prior step: ...] bracket citation, now passing reliably; (2) downstream agents were fabricating plausible-sounding financial mechanism language ('market priced in multiple expansion', 'discount rate compression') with no tool-result grounding — partially fixed by widening MARKET_SYSTEM's existing event-attribution rule to cover invented mechanisms, not just invented events. As of this fix, the model still sometimes asserts a mechanism claim but now self-corrects/hedges it within the same answer (e.g. explicitly noting 'the data does not specify which margin drivers drove this') rather than asserting it with no caveat at all. Category changed from routing to grounding to track this hedging behavior over time rather than routing correctness, which has been stable since the node-ID planner fix landed."
+    retired_date: null
+    retired_reason: null
+
+  - id: CHAIN-MACRO-MARKET-MARKET-002
+    question: "What petroleum stock implications followed from how crude prices reacted to macro conditions in January 2026?"
+    category: grounding
+    expected_agents: [macro, market]
+    expected_dag_shape: sequential
+    forbidden_phrases:
+      - "caused by"
+      - "due to"
+    source_tags: [fred, yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Same chain as CHAIN-MACRO-MARKET-MARKET-001 but phrased BACKWARDS (effect-first, cause-last) to test whether the planner can still resolve the correct dependency order from reversed natural-language phrasing, rather than depending on the question being asked in chronological order. Also checks MarketAgent doesn't cross its own causation-attribution rule when discussing petroleum equities in light of injected macro/crude context."
+    retired_date: null
+    retired_reason: null
+
+  # ── Level 3: directional sequential pairs (A->B vs B->A) ───────────────────
+
+  - id: DIR-FILINGS-MARKET-001
+    question: "How did the stock react to the SVB collapse?"
+    category: routing
+    expected_agents: [filings, market]
+    expected_dag_shape: sequential
+    source_tags: [wikipedia, yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Forward direction of the directional pair test — same question as SEQ-FILINGS-MARKET-001, kept as a duplicate ID-free reference point here so the forward/reversed pair lives together in the file for easy comparison. Event context (filings) must come before reaction measurement (market) — this order is the only one that makes logical sense for this question."
+    retired_date: null
+    retired_reason: null
+
+  - id: DIR-MARKET-FILINGS-001
+    question: "AAPL dropped 8% this week — find me SEC filings or Fed commentary that explains why."
+    category: grounding
+    expected_agents: [market, filings]
+    expected_dag_shape: sequential
+    forbidden_phrases:
+      - "caused by"
+      - "due to"
+    source_tags: [yfinance, sec_edgar]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Reversed direction of the filings/market pair — here the PRICE MOVE is given as fact upfront and filings is asked to find an explanation after the fact. Tests whether reversing the natural causal order (price first, cause-search second) still produces a coherent plan, or whether the planner/agents handle 'explain this price move' search differently than 'what happened, then how did price react'. Also tests that FilingsAgent doesn't invent a risk-factor explanation if none of its documents actually discuss the move — it should say so rather than force-fitting unrelated filing content to match the price drop."
+    retired_date: null
+    retired_reason: null
+
+  # ── Level 4: many-to-one merge ((A,B) -> C) ─────────────────────────────────
+
+  - id: MERGE-SENTIMENT-MARKET-FILINGS-001
+    question: "Insiders have been selling AAPL and the stock is down 8% this quarter — does Apple's 10-K explain any of this?"
+    category: grounding
+    expected_agents: [sentiment, market, filings]
+    expected_dag_shape: sequential
+    source_tags: [sec_form4, yfinance, sec_edgar]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Many-to-one merge — sentiment (insider selling) and market (price decline) both feed into filings as upstream context, testing whether FilingsAgent's synthesis correctly weighs BOTH inputs rather than anchoring on whichever one appears first in the enriched prompt or is more numerically salient (8% headline number vs. insider trade detail). Real risk: FilingsAgent could silently drop one of the two upstream contexts rather than addressing both."
+    retired_date: null
+    retired_reason: null
+
+  - id: MERGE-MACRO-SENTIMENT-MARKET-001
+    question: "Given recent unemployment trends and insider selling at JPM, how has the stock actually performed?"
+    category: routing
+    expected_agents: [macro, sentiment, market]
+    expected_dag_shape: parallel
+    source_tags: [fred, sec_form4, yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Originally written as a many-to-one merge test, but the actual question phrasing ('given X and Y, how did Z perform') is genuinely ambiguous between merge and parallel-comparison readings. The planner's parallel interpretation was reasoned and defensible: 'how has the stock actually performed' reads as asking for three independent signals to compare side by side, not asking MarketAgent to explain its price action USING macro/sentiment context. Corrected expected_dag_shape to parallel to match. See MERGE-MACRO-SENTIMENT-MARKET-002 for an unambiguous merge-shape test that doesn't have this reading."
+    retired_date: null
+    retired_reason: null
+
+  - id: MERGE-MACRO-SENTIMENT-MARKET-002
+    question: "Unemployment is rising and JPM insiders are selling — does JPM's stock price actually justify that level of pessimism, or is the market pricing in something different?"
+    category: routing
+    expected_agents: [macro, sentiment, market]
+    expected_dag_shape: sequential
+    source_tags: [fred, sec_form4, yfinance]
+    status: active
+    added_date: "2026-06-23"
+    added_reason: "Redesigned merge test fixing the ambiguity found in MERGE-MACRO-SENTIMENT-MARKET-001. The verdict-style framing ('does the price JUSTIFY that level of pessimism') structurally REQUIRES MarketAgent to evaluate price action against the macro+sentiment signals already established — it cannot be answered by reporting price in isolation, unlike the original question's 'how has the stock performed' framing which was satisfiable independently. This makes the merge dependency unambiguous rather than relying on phrasing that could plausibly be read as a parallel comparison."
+    retired_date: null
+    retired_reason: null
+
+  # ── Level 5: one-to-many fan-out (A -> (B, C)) ──────────────────────────────
+
+  - id: FANOUT-FILINGS-MARKET-SENTIMENT-001
+    question: "Given what happened during the SVB collapse, how did bank stocks react and what did insiders do?"
+    category: routing
+    expected_agents: [filings, market, sentiment]
+    expected_dag_shape: sequential
+    source_tags: [wikipedia, yfinance, sec_form4]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "One-to-many fan-out — filings establishes SVB event context once, then BOTH market and sentiment should receive that same context independently for their respective parts of the question (price reaction, insider activity). Tests whether both downstream nodes actually get the upstream context correctly in parallel, or whether only one of them ends up enriched while the other answers as if it were a cold, context-free single-agent question."
+    retired_date: null
+    retired_reason: null
+
+  - id: FANOUT-MACRO-MARKET-FILINGS-001
+    question: "Given the Fed's current rate stance, how are bank stocks trading, and what are banks themselves saying about the rate environment in their filings?"
+    category: routing
+    expected_agents: [macro, market, filings]
+    expected_dag_shape: sequential
+    source_tags: [fred, yfinance, sec_edgar]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Second fan-out test, different upstream agent (macro) feeding both market and filings in parallel. Tests the same dual-delivery concern as FANOUT-FILINGS-MARKET-SENTIMENT-001 with a different fan-out source, and additionally checks that FilingsAgent doesn't confuse macro's rate commentary with its own access to Fed communications (FilingsAgent owns get_fed_communications; macro_1's context here is FRED data, not Fed speech — the two should stay distinct even when both touch 'rates')."
+    retired_date: null
+    retired_reason: null
+
+  # ── Level 7: three-agent parallel (no dependencies) ─────────────────────────
+
+  - id: TRIPLE-MARKET-MACRO-SENTIMENT-001
+    question: "Give me a full picture on JPM right now: price performance, macro backdrop, and insider/news sentiment."
+    category: grounding
+    expected_agents: [market, macro, sentiment]
+    expected_dag_shape: parallel
+    forbidden_phrases:
+      - "driven by"
+      - "caused by"
+      - "because of"
+    source_tags: [yfinance, fred, sec_form4]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "First 3-agent parallel test — three genuinely independent signals (price, macro, sentiment) requested together with no causal framing in the question itself. Tests whether synthesis holds together cleanly with 3 independent views rather than just 2 (everything tested so far has been pairs) — specifically whether it avoids inventing connections between any of the three, the same failure mode found and fixed for 2-agent parallel pairs (PAIR-MACRO-SENTIMENT-001), now at one more degree of combinatorial complexity."
+    retired_date: null
+    retired_reason: null
+
+  - id: TRIPLE-MARKET-FILINGS-SENTIMENT-001
+    question: "For AAPL, show me: recent price action, what their latest 10-K says about risk factors, and current insider trading activity."
+    category: routing
+    expected_agents: [market, filings, sentiment]
+    expected_dag_shape: parallel
+    source_tags: [yfinance, sec_edgar, sec_form4]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Second 3-agent parallel test, different combination (market+filings+sentiment instead of market+macro+sentiment), to check the 3-way synthesis behavior generalizes across different agent triples rather than being specific to the one combination tested in TRIPLE-MARKET-MACRO-SENTIMENT-001."
+    retired_date: null
+    retired_reason: null
+
+  - id: TOOL-MARKET-001
+    question: "Compare AAPL and MSFT performance this year"
+    category: tool_selection
+    expected_agents: [market]
+    expected_tools: [get_prices_multi]
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Should trigger the batched multi-ticker call, not two sequential get_prices calls"
+    retired_date: null
+    retired_reason: null
+
+  - id: TOOL-FILINGS-001
+    question: "What are JPMorgan's risk factors and what does their MD&A say?"
+    category: tool_selection
+    expected_agents: [filings]
+    expected_tools: [get_prose]
+    source_tags: [sec_edgar]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Tests the multi-section batching instruction (section_names=[item_1a, item_7] in one call, not two separate calls) and the JPM/BAC short-stub fallback rule — JPM's item_7 may return a short cross-reference stub, which should trigger a semantic_search fallback per FILINGS_SYSTEM's documented large-bank exception. Both behaviors are explicitly documented in FILINGS_SYSTEM."
+    retired_date: null
+    retired_reason: null
+
+  - id: TOOL-MARKET-002
+    question: "Which energy companies do we track, and how have they performed this year?"
+    category: tool_selection
+    expected_agents: [market]
+    expected_tools: [get_companies_in_sector, get_prices_multi]
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Tests the documented two-step pattern — sector discovery before multi-ticker price lookup — rather than the agent guessing tickers from training knowledge"
+    retired_date: null
+    retired_reason: null
+
+  # ── Grounding / adversarial layer ──────────────────────────────────────────
+
+  - id: GROUND-MARKET-001
+    question: "Why did oil prices spike in March?"
+    category: grounding
+    expected_agents: [market]
+    forbidden_phrases:
+      - "due to"
+      - "caused by"
+      - "driven by"
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Causation trap — MARKET_SYSTEM explicitly forbids attributing price movements to events unless stated in tool results. Tests whether MarketAgent stays in its lane rather than confabulating a cause."
+    retired_date: null
+    retired_reason: null
+
+  - id: GROUND-SENTIMENT-001
+    question: "Were JPM executives selling because they lost confidence in the company this quarter?"
+    category: grounding
+    expected_agents: [sentiment]
+    forbidden_phrases:
+      - "lost confidence"
+      - "bearish signal"
+    expected_answer_contains: "tax withholding"
+    source_tags: [sec_form4]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Interpretation-rule bait — tests whether SentimentAgent correctly excludes Type F (RSU tax withholding) transactions from being counted as discretionary selling, per its own explicit interpretation rules"
+    retired_date: null
+    retired_reason: null
+
+  - id: GROUND-MACRO-SENTIMENT-001
+    question: "How confident are JPM employees about the company?"
+    category: grounding
+    expected_agents: [sentiment]
+    forbidden_phrases:
+      - "consumer sentiment"
+      - "UMCSENT"
+    source_tags: [sec_form4, fred]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Scope-overreach bait, found via a real Reflexion catch during testing — MacroAgent previously substituted general consumer sentiment (UMCSENT) as a proxy for firm-specific employee/insider confidence, a category mismatch. Tests whether the system correctly defers to sentiment data (or states it lacks employee-survey data) rather than reaching for a loosely-related macro indicator."
+    retired_date: null
+    retired_reason: null
+
+  - id: GROUND-DATERANGE-001
+    question: "What was AAPL's stock price on January 1, 2015?"
+    category: grounding
+    expected_agents: [market]
+    expected_answer_contains: "2020"
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Out-of-range date — data only available from 2020-01-01 onward. Tests whether the agent clearly states the data isn't available rather than inventing a plausible-sounding historical price."
+    retired_date: null
+    retired_reason: null
+
+  - id: GROUND-SYNTHESIS-001
+    question: "What's the price of WTI crude oil?"
+    category: grounding
+    expected_agents: [market, macro]
+    forbidden_phrases:
+      - "discrepancy"
+      - "data may be stale"
+      - "inconsistency"
+    expected_answer_contains: "spot"
+    source_tags: [yfinance, fred]
+    status: active
+    added_date: "2026-06-21"
+    added_reason: "Synthesis-layer regression guard, distinct from the routing version of this question (PAIR-MARKET-MACRO-001) — specifically checks that two different-but-valid numbers from different sources are framed as complementary, not as an error or discrepancy needing explanation. This was a real bug found and fixed in dag_executor.py's SYNTHESIS_SYSTEM."
+    retired_date: null
+    retired_reason: null
+
+# ── Known eval-design findings (not system bugs) — 2026-06-21 baseline run ──
+# First trustworthy run (after fixing tool-attribution instrumentation) scored
+# 20/23. All three failures traced to eval-design gaps, not real system bugs:
+#
+#   GROUND-MARKET-001 — expected market-only, got macro+filings sequential.
+#     The system correctly avoided having MarketAgent confabulate a cause
+#     (which MARKET_SYSTEM explicitly forbids) and instead routed event-
+#     causation to FilingsAgent, citing real Fed documents. Tripped the
+#     forbidden_phrases check on "driven by" — but the phrase was legitimately
+#     sourced, not hallucinated. Question/check needs updating to allow
+#     causal language when explicitly cited from a document, not banned outright.
+#
+#   GROUND-SENTIMENT-001 — expected sentiment-only, got sentiment+filings.
+#     FilingsAgent added financial-metrics context (net income, assets) —
+#     reasonable enrichment, not wrong, just broader than the test assumed.
+#     Also tripped forbidden_phrases on "lost confidence" — but the answer
+#     used the phrase to REJECT the framing ("the evidence does not support
+#     that conclusion"), not assert it. forbidden_phrases checking is naive
+#     substring matching with no negation awareness — a real limitation of
+#     score_grounding, not a system bug.
+#
+#   GROUND-MACRO-SENTIMENT-001 — same sentiment+filings pattern as above,
+#     no forbidden phrase hit, passed grounding_pass but failed routing_pass
+#     against an expected_agents list that was probably too narrow for what
+#     a good answer actually requires.
+#
+# Action needed eventually (not blocking): make score_grounding negation-
+# aware, or scope forbidden_phrases checks to "asserted without citation"
+# rather than "phrase appears anywhere." Revisit when building out the
+# grounding-layer judge call rather than relying on pure string matching.
+
+# ── Candidate questions awaiting promotion ──────────────────────────────────
+# New questions inferred from live traffic land in
+# query/evaluations/candidate_questions.yaml, never directly here.
+# A human reviews and moves accepted entries into this file.

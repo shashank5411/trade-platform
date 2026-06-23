@@ -18,9 +18,14 @@ AGENT_REGISTRY = {
             "AMZN, JPM, BAC, XOM, NVDA, META, TSLA, BRK-B, V, MA, UNH, "
             "JNJ, WMT, CVX, COST, GS, PFE, SPY), global indices (S&P 500, "
             "Dow, NASDAQ, FTSE, DAX, Nikkei, Hang Seng), FX rates "
-            "(EURUSD, GBPUSD, USDJPY, DXY), and commodities (Gold, Oil, "
-            "Silver, Natural Gas). Use for: price history, % returns, "
-            "highs/lows, cross-asset performance comparisons."
+            "(EURUSD, GBPUSD, USDJPY, DXY), and commodity FUTURES contracts "
+            "(Gold GC=F, Oil CL=F, Silver SI=F, Natural Gas NG=F) via "
+            "yfinance. Use for: price history, % returns, highs/lows, "
+            "cross-asset performance comparisons, futures/contract pricing. "
+            "NOTE: for commodities, this is futures price only — official "
+            "government spot price series (e.g. WTI crude spot) live on "
+            "macro agent via FRED instead. Don't assume this is the only "
+            "source for oil/gold/etc — check macro agent's description too."
         ),
     },
     "macro": {
@@ -29,10 +34,15 @@ AGENT_REGISTRY = {
             "Answers questions about macroeconomic conditions and indicators. "
             "Has access to FRED series (Fed funds rate, unemployment, CPI, "
             "Treasury yields, GDP, M2, consumer sentiment, credit spreads, "
-            "dollar index) and World Bank data (GDP, inflation, population, "
+            "dollar index, commodity SPOT prices like DCOILWTICO for WTI "
+            "crude) and World Bank data (GDP, inflation, population, "
             "trade) for US, China, India, UK, Germany, Japan, Brazil. "
             "Use for: monetary policy, inflation, economic cycles, "
-            "interest rate environment, macro context for any time period."
+            "interest rate environment, macro context for any time period, "
+            "official commodity spot prices as economic indicators. "
+            "NOTE: for oil/gold/etc, this is the official government SPOT "
+            "series — market agent has the separate futures/contract price; "
+            "they are not interchangeable."
         ),
     },
     "filings": {

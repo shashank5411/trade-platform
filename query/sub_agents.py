@@ -109,10 +109,40 @@ Rules:
 - Never attribute price movements to specific events (earnings,
   announcements, tariffs, Fed meetings) unless that event and its
   impact are explicitly stated in the tool results
+- This also applies to FINANCIAL MECHANISMS, not just events: do not
+  invent or assert explanations like "the market priced in rate cuts,"
+  "multiple expansion," "discount rate compression," "operating
+  leverage drove this," or any other causal financial theory connecting
+  price moves to macro conditions or other context — UNLESS that exact
+  mechanism is explicitly stated in a tool result or in attributed prior
+  analysis (using the [from prior step: ...] format). These phrases sound
+  like expert analysis but are fabricated narrative if no tool result
+  or prior-step content actually says them.
+- What you CAN say instead: state the numbers, state that they moved in
+  the same general period as context T (e.g. "petroleum equities rose
+  X% during the same window the macro analysis describes as Y"), and
+  explicitly flag any deeper explanation as your own unverified
+  interpretation if you choose to offer one at all — e.g. "one possible
+  but unverified explanation could be X; the data itself does not
+  confirm this mechanism."
 - Only report aggregate metrics present in the data: start price,
   end price, % change, high, low — and the exact date range covered
 - If the requested date range exceeds available data, explicitly
   state what date range was actually retrieved and what is missing
+
+THREE SOURCES OF INFORMATION — KNOW WHICH IS WHICH:
+  1. Data YOU fetched via your own tool calls this turn — cite freely,
+     this is your grounded evidence.
+  2. Prior analysis from a DIFFERENT specialist, passed to you as context
+     — this was verified by THEM, not by you. You may reference and build
+     on it, but attribute it explicitly ("per the macro analysis above")
+     rather than restating its specific figures as if you had fetched them
+     yourself. If it seems wrong or outdated, say so rather than silently
+     trusting or silently repeating it.
+  3. Anything from training knowledge — forbidden for prices, indicators,
+     filings content, or any other data point; only ever use tool results
+     or properly attributed prior analysis.
+
 """
 
 MACRO_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. Economic indicator data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, fetch the data and report what is available rather than assuming the date is invalid.
@@ -123,6 +153,7 @@ about economic indicators, monetary policy, and macro conditions.
 Available series:
   FRED:       FEDFUNDS UNRATE CPIAUCSL DGS10 DGS2 GDP M2SL UMCSENT
               T10Y2Y BAMLH0A0HYM2 DTWEXBGS DEXUSEU DEXJPUS
+              DCOILWTICO (WTI crude spot, $/barrel)
   World Bank: NY.GDP.MKTP.CD NY.GDP.PCAP.CD FP.CPI.TOTL.ZG
               SP.POP.TOTL NE.TRD.GNFS.ZS
               Countries: US CN IN GB DE JP BR
@@ -133,11 +164,32 @@ Rules:
 - Use get_indicator for specific series deep-dives
 - Always note data vintage and staleness for indicators
 - Explain what each indicator means in plain English alongside the numbers
+- DCOILWTICO is the official government SPOT price for WTI crude oil —
+  this IS within your toolset. If asked about "oil prices" as an economic
+  indicator (not futures/contract framing), use this series and report it
+  as the spot price, distinct from any futures price MarketAgent might
+  also report via CL=F.
 - Equity market prices (SPY, stock tickers) are outside your toolset
   — do not attempt to fetch them via indicator tools
 - If a question asks about both macro indicators AND equity market
   performance, answer only the macro portion and note that equity
   performance will be provided by the MarketAgent
+
+- If the requested date range exceeds available data, explicitly
+  state what date range was actually retrieved and what is missing
+
+THREE SOURCES OF INFORMATION — KNOW WHICH IS WHICH:
+  1. Data YOU fetched via your own tool calls this turn — cite freely,
+     this is your grounded evidence.
+  2. Prior analysis from a DIFFERENT specialist, passed to you as context
+     — this was verified by THEM, not by you. You may reference and build
+     on it, but attribute it explicitly ("per the macro analysis above")
+     rather than restating its specific figures as if you had fetched them
+     yourself. If it seems wrong or outdated, say so rather than silently
+     trusting or silently repeating it.
+  3. Anything from training knowledge — forbidden for prices, indicators,
+     filings content, or any other data point; only ever use tool results
+     or properly attributed prior analysis.
 """
 
 FILINGS_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. SEC filing and document data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, use what is available rather than assuming the date is invalid.
@@ -231,6 +283,23 @@ Partial information with clear sourcing is better than no answer.
 Acknowledge gaps in one sentence, then lead with what you found.
 Never return an empty answer — if you hit the iteration limit,
 summarize everything retrieved so far.
+
+- If the requested date range exceeds available data, explicitly
+  state what date range was actually retrieved and what is missing
+
+THREE SOURCES OF INFORMATION — KNOW WHICH IS WHICH:
+  1. Data YOU fetched via your own tool calls this turn — cite freely,
+     this is your grounded evidence.
+  2. Prior analysis from a DIFFERENT specialist, passed to you as context
+     — this was verified by THEM, not by you. You may reference and build
+     on it, but attribute it explicitly ("per the macro analysis above")
+     rather than restating its specific figures as if you had fetched them
+     yourself. If it seems wrong or outdated, say so rather than silently
+     trusting or silently repeating it.
+  3. Anything from training knowledge — forbidden for prices, indicators,
+     filings content, or any other data point; only ever use tool results
+     or properly attributed prior analysis.
+
 """
 
 
@@ -246,8 +315,16 @@ def _run_agent(
     session_id:   str  = None,
     token_budget: int  = 50_000,
     max_iter:     int  = 8,
+    node_id:      str  = None,
 ) -> str:
-    """Shared ReAct loop with guardrails, telemetry, and reflexion."""
+    """Shared ReAct loop with guardrails, telemetry, and reflexion.
+
+    node_id identifies which DAG step triggered this run (e.g. "market_2"
+    when the same specialist runs more than once in one plan with
+    different upstream context). Defaults to None for any caller that
+    doesn't pass one (e.g. direct agent.run() calls outside the DAG
+    executor, or older code paths) — Trace handles None gracefully.
+    """
     messages = list(history or [])
     messages.append({"role": "user", "content": question})
 
@@ -256,6 +333,7 @@ def _run_agent(
         agent=agent_name,
         question=question,
         model=MODEL,
+        node_id=node_id,
     )
 
     tool_call_seen = set()
@@ -370,11 +448,18 @@ def _run_agent(
                     ), True
                 if verbose:
                     print(f"  [{agent_name}] tool: {block.name}")
-                result = _execute_tool(block.name, block.input)
+                result = _execute_tool(block.name, block.input, agent_name=agent_name)
                 return block_id, result or "No result returned.", False
 
             results_map = {}
-            if len(to_execute) == 1:
+            if len(to_execute) == 0:
+                # Defensive guard — tool_use_blocks existed but to_execute
+                # ended up empty (e.g. all calls collapsed during dedup
+                # bookkeeping). ThreadPoolExecutor(max_workers=0) raises,
+                # so just skip straight to the no-results nudge below
+                # rather than crashing the whole agent run.
+                pass
+            elif len(to_execute) == 1:
                 bid, res, dedup = _run_one(list(to_execute.keys())[0])
                 results_map[bid] = (res, dedup)
             else:
@@ -517,7 +602,7 @@ def _run_agent(
                 for b in r.content:
                     if b.type != "tool_use":
                         continue
-                    res = _execute_tool(b.name, b.input)
+                    res = _execute_tool(b.name, b.input, agent_name=agent_name)
                     trace.record_tool_call(b.name, b.input, res)
                     results.append({
                         "type":        "tool_result",
@@ -547,7 +632,7 @@ def _run_agent(
     return answer
 
 
-def _execute_tool(name: str, inputs: dict) -> str:
+def _execute_tool(name: str, inputs: dict, agent_name: str = None) -> str:
     if name not in registry:
         return f"Unknown tool: {name}"
     try:
@@ -577,10 +662,12 @@ class MarketAgent:
     MAX_ITER     = 8
 
     def run(self, question: str, history: list = None,
-            verbose: bool = True, session_id: str = None) -> str:
+            verbose: bool = True, session_id: str = None,
+            node_id: str = None) -> str:
         return _run_agent(question, MARKET_SYSTEM, MARKET_TOOLS,
                           history, verbose, self.name, session_id,
-                          self.TOKEN_BUDGET, self.MAX_ITER)
+                          self.TOKEN_BUDGET, self.MAX_ITER,
+                          node_id=node_id)
 
 
 class MacroAgent:
@@ -589,10 +676,12 @@ class MacroAgent:
     MAX_ITER     = 8
 
     def run(self, question: str, history: list = None,
-            verbose: bool = True, session_id: str = None) -> str:
+            verbose: bool = True, session_id: str = None,
+            node_id: str = None) -> str:
         return _run_agent(question, MACRO_SYSTEM, MACRO_TOOLS,
                           history, verbose, self.name, session_id,
-                          self.TOKEN_BUDGET, self.MAX_ITER)
+                          self.TOKEN_BUDGET, self.MAX_ITER,
+                          node_id=node_id)
 
 
 class FilingsAgent:
@@ -601,11 +690,12 @@ class FilingsAgent:
     MAX_ITER     = 15
 
     def run(self, question: str, history: list = None,
-            verbose: bool = True, session_id: str = None) -> str:
+            verbose: bool = True, session_id: str = None,
+            node_id: str = None) -> str:
         return _run_agent(question, FILINGS_SYSTEM, FILINGS_TOOLS,
                           history, verbose, self.name, session_id,
-                          self.TOKEN_BUDGET, self.MAX_ITER)
-
+                          self.TOKEN_BUDGET, self.MAX_ITER,
+                          node_id=node_id)
 
 SENTIMENT_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. News and insider trade data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, fetch the data and report what is available rather than assuming the date is invalid.
 
@@ -746,10 +836,12 @@ class SentimentAgent:
     MAX_ITER     = 10
 
     def run(self, question: str, history: list = None,
-            verbose: bool = True, session_id: str = None) -> str:
+            verbose: bool = True, session_id: str = None,
+            node_id: str = None) -> str:
         return _run_agent(question, SENTIMENT_SYSTEM, SENTIMENT_TOOLS,
                           history, verbose, self.name, session_id,
-                          self.TOKEN_BUDGET, self.MAX_ITER)
+                          self.TOKEN_BUDGET, self.MAX_ITER,
+                          node_id=node_id)
 
 
 market_agent    = MarketAgent()

@@ -1,0 +1,84 @@
+{
+  "summary": {
+    "run_id": "2026-06-23T00-13-06",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "routing": "0/1"
+    },
+    "total_passed": 0,
+    "total_input_tokens": 18020,
+    "total_output_tokens": 1796,
+    "estimated_total_cost_usd": 0.027,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": [
+      {
+        "id": "MERGE-MACRO-SENTIMENT-MARKET-001",
+        "category": "routing",
+        "reason": "routing mismatch (expected ['macro', 'sentiment', 'market'], got ['macro', 'market', 'sentiment'])"
+      }
+    ]
+  },
+  "results": [
+    {
+      "run_id": "2026-06-23T00-13-06",
+      "question_id": "MERGE-MACRO-SENTIMENT-MARKET-001",
+      "question": "Given recent unemployment trends and insider selling at JPM, how has the stock actually performed?",
+      "category": "routing",
+      "expected_agents": [
+        "macro",
+        "sentiment",
+        "market"
+      ],
+      "actual_agents": [
+        "macro_1",
+        "sentiment_1",
+        "market_1"
+      ],
+      "actual_agent_types": [
+        "macro",
+        "market",
+        "sentiment"
+      ],
+      "expected_dag_shape": "sequential",
+      "actual_dag_shape": "parallel",
+      "routing_pass": false,
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices"
+        ],
+        "MacroAgent": [
+          "get_indicator"
+        ],
+        "SentimentAgent": [
+          "get_insider_summary",
+          "get_news_summary",
+          "get_prices"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "planner_reasoning": null,
+      "final_answer": "# JPM Performance, Insider Activity, and Macro Context: Integration\n\n## Stock Performance (Primary Finding)\nJPM delivered **+0.9% total return** over the period from late December 2025 through mid-June 2026, trading from $322.37 to $325.22. Over the narrower 90-day window (late March through mid-June 2026), the stock gained **+15.6%**, ranging between $280.32 and $338.09. Recent weeks showed particular strength, with the stock at the $320+ level by mid-June.\n\n## Insider Selling Signal\nDuring the same 90-day period (March\u2013June 2026), JPM insiders executed **net open-market sales totaling $67.2 million** across 16 transactions, with **zero open-market purchases**. This represents a clear discretionary net selling signal. (Note: an additional $134.4 million in automatic RSU vesting transactions occurred during this period but are excluded as non-discretionary.)\n\n## Divergent Signals\n**Insiders were net selling throughout the period while the stock appreciated 15.6%.** These signals moved in opposite directions\u2014no causal relationship can be inferred from the available data.\n\n## Macro Context: Labor Market Slack\nThe U.S. unemployment rate has remained **elevated and stable at 4.3%\u20134.5% over the past 12 months** (June 2025\u2013May 2026), peaking at 4.5% in November 2025 and holding at 4.3% as of May 2026. This is above the Federal Reserve's implicit 3.5%\u20133.8% target and suggests **labor market momentum has stalled**\u2014not recessionary, but decelerating. This macro backdrop of ongoing labor market slack could weigh on equities more broadly through consumer spending concerns, though firm-specific factors appear to have driven JPM's outperformance during this window.\n\n## News Signal\nBenzinga published 9 articles on JPM between late May and late June 2026 with neutral overall sentiment: 3 negative, 3 positive, 3 neutral. Granular publication dates were not available, so no timing correlation with price movement can be established.",
+      "tokens_by_node": {
+        "market_1": {
+          "input_tokens": 8209,
+          "output_tokens": 330
+        },
+        "sentiment_1": {
+          "input_tokens": 4267,
+          "output_tokens": 1097
+        },
+        "macro_1": {
+          "input_tokens": 5544,
+          "output_tokens": 369
+        }
+      },
+      "total_input_tokens": 18020,
+      "total_output_tokens": 1796,
+      "estimated_cost_usd": 0.027,
+      "latency_ms": 34718,
+      "error": null
+    }
+  ]
+}

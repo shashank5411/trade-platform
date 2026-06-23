@@ -18,6 +18,11 @@ Schema (one JSON file per agent run):
   reflexion_triggered BOOLEAN
   reflexion_passed    BOOLEAN
   had_dedup_hits   BOOLEAN
+  attribution_warnings ARRAY  warning strings from dag_executor's
+                              unattributed-figure heuristic (empty for
+                              normal per-agent traces; populated only on
+                              the synthetic per-round trace dag_executor
+                              writes when warnings fire)
   answer_preview  STRING    first 500 chars of final answer
   model           STRING
   env             STRING
@@ -47,10 +52,11 @@ class Trace:
     flush to S3 at end.
     """
     def __init__(self, session_id: str, agent: str,
-                 question: str, model: str):
+                 question: str, model: str, node_id: str = None):
         self.trace_id            = str(uuid.uuid4())
         self.session_id          = session_id or "no-session"
         self.agent               = agent
+        self.node_id              = node_id
         self.question            = question[:500]
         self.model               = model
         self.env                 = ENV
@@ -67,6 +73,7 @@ class Trace:
         self.reflexion_passed    = True
         self.had_dedup_hits      = False
         self.answer_preview      = ""
+        self.attribution_warnings = []
 
     def record_iteration(self):
         self.iterations += 1
@@ -92,6 +99,12 @@ class Trace:
     def record_answer(self, answer: str):
         self.answer_preview = answer[:500]
 
+    def record_attribution_warnings(self, warnings: list):
+        """Attach attribution-check warnings (see dag_executor.py's
+        _check_unattributed_figures) so they're queryable via Athena
+        alongside the rest of the trace, not just printed to console."""
+        self.attribution_warnings = warnings
+
     def flush(self):
         """Write trace to S3 as JSON, partitioned by year/month."""
         now       = datetime.now(timezone.utc)
@@ -109,6 +122,7 @@ class Trace:
             "trace_id":            self.trace_id,
             "session_id":          self.session_id,
             "agent":               self.agent,
+            "node_id":             self.node_id,
             "question":            self.question,
             "iterations":          self.iterations,
             "tools_called":        tools_called_for_s3,
@@ -122,6 +136,7 @@ class Trace:
             "reflexion_passed":    self.reflexion_passed,
             "had_dedup_hits":      self.had_dedup_hits,
             "answer_preview":      self.answer_preview,
+            "attribution_warnings": self.attribution_warnings,
             "model":               self.model,
             "env":                 self.env,
             "timestamp":           timestamp,
