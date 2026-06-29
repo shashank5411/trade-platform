@@ -1,0 +1,80 @@
+{
+  "summary": {
+    "run_id": "2026-06-28T22-12-28",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "tool_selection": "1/1"
+    },
+    "total_passed": 1,
+    "total_input_tokens": 25808,
+    "total_output_tokens": 961,
+    "estimated_total_cost_usd": 0.0306,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": []
+  },
+  "results": [
+    {
+      "run_id": "2026-06-28T22-12-28",
+      "id": "TOOL-MARKET-002",
+      "question_id": "TOOL-MARKET-002",
+      "tier": "stable",
+      "question": "Which energy companies do we track, and how have they performed this year?",
+      "category": "tool_selection",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market_1"
+      ],
+      "actual_agent_types": [
+        "market"
+      ],
+      "expected_dag_shape": null,
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "routing_reasons": [],
+      "tool_selection_pass": true,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_companies_in_sector",
+          "get_prices_by_sector",
+          "get_prices_multi"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "injection_pass": null,
+      "injection_suspected": null,
+      "injection_judge_reasoning": null,
+      "expected_injection_suspected": null,
+      "advice_boundary_pass": null,
+      "advice_boundary_informative": null,
+      "advice_boundary_non_advisory": null,
+      "advice_boundary_reasoning": null,
+      "scope_boundary_pass": null,
+      "scope_boundary_declined": null,
+      "scope_boundary_reasoning": null,
+      "trajectory_pass": null,
+      "trajectory_adapted": null,
+      "trajectory_reasoning": null,
+      "planner_reasoning": null,
+      "final_answer": "Great! Here are the major energy companies we track and their performance **year-to-date through June 15, 2026** (weekly granularity):\n\n## Energy Company Performance \u2013 2026 YTD\n\n| Company | Ticker | Start Price | End Price | % Change | High | Low |\n|---------|--------|-------------|-----------|----------|------|-----|\n| **Exxon Mobil** | XOM | $121.02 | $137.81 | +13.9% | $175.22 | $116.69 |\n| **Chevron** | CVX | $152.99 | $173.63 | +13.5% | $212.76 | $148.43 |\n| **ConocoPhillips** | COP | $95.25 | $107.74 | +13.1% | $134.87 | $91.73 |\n| **Schlumberger** | SLB | $39.76 | $48.09 | +21.0% | $58.51 | $37.65 |\n| **Marathon Petroleum** | MPC | $163.69 | $242.91 | +48.4% | $272.46 | $160.91 |\n| **EOG Resources** | EOG | $105.44 | $129.98 | +23.3% | $150.70 | $100.53 |\n| **Occidental Petroleum** | OXY | $41.99 | $51.82 | +23.4% | $66.74 | $40.01 |\n\n**Key Observations:**\n\n- **Marathon Petroleum (MPC)** significantly outperformed the group with a +48.4% gain, reaching highs near $272.\n- **Occidental Petroleum (OXY)** and **EOG Resources (EOG)** also delivered strong returns of +23.4% and +23.3% respectively.\n- **Schlumberger (SLB)**, an oilfield services company, gained +21.0%.\n- The three major integrated oil producers\u2014**Exxon Mobil (XOM)**, **Chevron (CVX)**, and **ConocoPhillips (COP)**\u2014all posted more modest but solid gains in the +13\u201314% range.\n\nAll seven tracked energy companies showed positive performance this year, with returns concentrated in the refining/services segment (MPC, SLB) and smaller independents (EOG, OXY), while the large-cap integrated majors showed steady but more conservative appreciation.",
+      "tokens_by_node": {
+        "market_1": {
+          "input_tokens": 25808,
+          "output_tokens": 961
+        },
+        "dag_executor": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      },
+      "total_input_tokens": 25808,
+      "total_output_tokens": 961,
+      "estimated_cost_usd": 0.03061,
+      "latency_ms": 25132,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+name: Eval Regression Gate
+
+# Standalone workflow, deliberately separate from deploy.yaml.
+#
+# Why separate rather than a job added to deploy.yaml: deploy.yaml's
+# top-level `paths:` filter (trade_platform/, ingestion/, requirements.txt,
+# app.py, cdk.json) is scoped to infra changes. Agent/prompt changes land
+# in query/ without touching any of those paths, so a PR that only changes
+# query/planner.py would never trigger deploy.yaml at all — adding a job
+# there wouldn't actually run on the PRs we care about gating.
+#
+# This workflow gets its own trigger scoped to query/**, so it fires
+# independently of deploy.yaml and doesn't affect (or risk breaking)
+# the existing deploy pipeline.
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'query/**'
+
+jobs:
+  eval-gate:
+    name: Eval Regression Gate
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::197411402303:role/GitHubActionsDeployRole-dev
+          aws-region: us-east-2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run eval (stable tier only)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ENVIRONMENT: dev
+        run: python query/evaluations/run_eval.py --tier stable --out results.json
+
+      - name: Check gate
+        run: python query/evaluations/check_gate.py results.json --threshold 0.60
+
+      - name: Upload full results (always, for visibility into monitored tier)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: results.json

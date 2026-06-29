@@ -1,0 +1,15 @@
+
+[Eval Run 2026-06-28T22-11-12] 1 questions to run
+
+
+============================================================
+  EVAL RUN COMPLETE — 2026-06-28T22-11-12
+============================================================
+  Total: 1  Passed: 1
+  By category: {'routing': '1/1'}
+  Tokens: 6,888 in / 263 out — est. cost: $0.0082 (rough estimate, see note in JSON)
+
+  Results folder: C:\Users\shash\trade-platform\query\evaluations\results\run_2026-06-28T22-11-12
+  JSON:    C:\Users\shash\trade-platform\query\evaluations\results\run_2026-06-28T22-11-12\results.json
+  Console: C:\Users\shash\trade-platform\query\evaluations\results\run_2026-06-28T22-11-12\console.log
+

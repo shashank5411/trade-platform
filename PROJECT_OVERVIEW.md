@@ -60,9 +60,13 @@ trade-platform/
 │   ├── api.py                          # 17 tool implementations
 │   ├── tools.py                        # Anthropic tool schemas + get_registry()
 │   ├── telemetry.py                    # Trace class — S3 JSON traces for Athena
-│   ├── reflexion.py                    # critique() + apply_reflexion() self-check loop
+│   ├── reflexion.py                    # critique()/critique_synthesis() + apply_reflexion() self-check loop
 │   ├── athena.py                       # Athena client wrapper (query(), error types)
-│   └── config.py                       # get_client() — Anthropic client singleton
+│   ├── config.py                       # get_client() — Anthropic client singleton
+│   └── evaluations/
+│       ├── questions.yaml              # eval question set (routing/tool_selection/grounding)
+│       ├── run_eval.py                 # runner — real planner+executor, no mocking
+│       └── results/                    # one run_<timestamp>/{results.json,console.log} per run
 └── scripts/
     └── bootstrap_sp500.py               # One-shot: Wikipedia → EDGAR CIK mapping
 ```
@@ -190,6 +194,11 @@ SEC and insiders use S3 tracker files instead of DynamoDB watermarks (`tracker/s
 
 - Bucket: `{env}-trade-llmops-{account}`, prefix `traces/year=/month=/`.
 - `Trace` (telemetry.py) stores a `result_full` field on each tool-call dict **in memory only** — stripped before the S3 write in `flush()`. `result_preview` (1500 chars, unchanged) is what's actually persisted to S3/Athena.
+- `Trace` fields beyond the original per-agent run shape — all explicitly added to the `flush()` record dict (it builds an explicit dict, NOT `__dict__` serialization, so any new field must be added there by hand, not just set as an instance attribute):
+  - `attribution_warnings` (ARRAY) — populated only on the synthetic `agent="dag_executor"` trace written when `_check_unattributed_figures` fires.
+  - `synthesis_reflexion_triggered` / `synthesis_reflexion_passed` (BOOLEAN) — same synthetic `dag_executor` trace, records the synthesis-level reflexion outcome.
+  - `planner_parse_failure_raw_output` / `planner_parse_failure_stop_reason` — synthetic `agent="planner"` trace written on a JSON parse failure in `plan()`.
+  - `node_id` — identifies which DAG step (e.g. `market_2`) triggered a per-agent run, distinct from `agent` (the specialist type); `None` for non-DAG or synthetic traces.
 
 ---
 
@@ -358,7 +367,9 @@ EDGAR: split on `Item X.` headers, 400 tok max/50 overlap. Wikipedia: split on `
 | Tool dedup | `call_sig = f"{name}:{json.dumps(inputs, sort_keys=True)}"` — repeat calls short-circuit |
 | Token budget | Per-agent budget (Market/Macro 50k, Filings 150k, Sentiment 75k); partial answer on overflow |
 | Telemetry | `Trace` (telemetry.py) → S3 `traces/year=/month=/`. `result_preview` (1500 char) is what's persisted — unchanged. |
-| Reflexion | Haiku critic (`reflexion.py`) checks grounding; now reads **`result_full`** (untruncated, in-memory-only field on the same `tools_called` dict) instead of `result_preview` — fixed a bug where any tool result over 1500 chars got silently truncated before the critic ever saw it, causing false "hallucinated/missing data" verdicts on correct answers. `result_full` is stripped in `Trace.flush()` before the S3 write — persisted shape unchanged. |
+| Reflexion (per-agent) | Haiku critic (`reflexion.py`) checks grounding; reads **`result_full`** (untruncated, in-memory-only field on the same `tools_called` dict) instead of `result_preview`. Skips for answers under `REFLEXION_MIN_WORDS=200` words **unless** `_needs_reflexion_despite_length()` forces it anyway — see Reflexion Length-Gate Exception below. |
+| Reflexion (synthesis) | `critique_synthesis()` (`reflexion.py`) — separate critic pass on the FINAL synthesized multi-agent answer, checking it against the concatenated agent outputs it was built from (not raw tool results). Catches fabricated causal links between agents' findings, dropped coverage, and misattributed figures that per-agent reflexion can't see since each agent is only checked against its own tool calls. Same `>=200 words` skip + forced-override exception as per-agent reflexion. One retry on failure; appends `CAVEAT` if the retry still fails. Wired into `dag_executor.py`'s `execute()` synthesis tail. |
+| Attribution check | `dag_executor.py`'s `_check_unattributed_figures()` — soft heuristic flagging any sequential-DAG node whose answer contains a numeric figure but no `[from prior step: ...]` bracket (see Sequential Citation Enforcement below). Never blocks or rewrites — only logs a warning + writes a synthetic `Trace` record. |
 
 ### Multi-Agent Architecture
 
@@ -382,9 +393,21 @@ All four share `_run_agent()` (ReAct loop, model `claude-sonnet-4-6`). Each agen
 
 **Planner** (`planner.py`): includes an **IMPLICIT DATE RESOLUTION** section — maps relative phrases ("recently", "before earnings", "this quarter", no time reference at all) to default windows per data type, so the planner resolves dates itself rather than asking the user. Also resolves agent routing via explicit content rules (e.g. Fed communications → filings never macro; insider/news keywords → sentiment never filings).
 
+`plan()`'s `max_tokens` is `1000` (raised from `500` — the original value truncated mid-JSON on verbose 4-agent plans with a long `reasoning` field, ~40% of the time on one tested question; confirmed via repeated sampling that `1000` brings truncation to 0%). On a JSON parse failure (still possible for non-truncation reasons, observed at a low ~4% rate, not chased further), `plan()` writes a synthetic `Trace(agent="planner")` via `record_planner_parse_failure(raw_output, stop_reason)` before falling back to the single-`macro` degraded plan — previously this fell back silently with only a console print, invisible during `--quiet` eval runs.
+
+**MULTI-AGENT MERGE AND FAN-OUT PATTERNS** block includes a worked example for **MarketAgent as merge point** — added because the dependency guide previously gave FilingsAgent explicit textual permission to be a context-receiving judgment node ("Filings agent benefits from macro context when question is about WHY something happened") with no equivalent for Market, causing the planner to default to flat-parallel or redirect to filings even for explicitly price-magnitude-framed questions (e.g. "is the SIZE of the price move consistent with the SIZE of two upstream signals"). Confirmed via testing: before the worked example, a magnitude-framed question hit the correct `market_1 depends_on [macro_1, sentiment_1]` shape only 1/3 times; after, 15/15 across two test batches.
+
 **Commodity price disambiguation** (planner routing rule 4): oil/gas/gold/silver have TWO valid, non-interchangeable data sources — `market` (`get_prices` with `CL=F`/`GC=F`/`SI=F`/`NG=F` → futures/contract price, ticker-based) vs `macro` (`get_indicator` with `DCOILWTICO`/`DCOILBRENTEU` etc. → official daily SPOT price from FRED). Routes to `market` for "futures"/ticker-syntax/trading-performance framing, `macro` for "spot price"/economic-indicator framing ("oil prices and inflation"), and to **both in parallel** when genuinely ambiguous (e.g. bare "price of WTI crude oil") — synthesis then presents both figures labeled by source rather than guessing which was meant.
 
-**Executor** (`dag_executor.py`): when a round has 2+ agents with no `depends_on`, each gets a role-scoping hint appended to its question (`ROLE_DESCRIPTIONS` dict) so it doesn't try to answer outside its domain or ask for clarification about another agent's data. Synthesis call uses a `SYNTHESIS_SYSTEM` prompt instructing it to note partial-data gaps in one sentence rather than blocking the answer.
+**Executor** (`dag_executor.py`): when a round has 2+ agents with no `depends_on`, each gets a role-scoping hint appended to its question (`ROLE_DESCRIPTIONS` dict) so it doesn't try to answer outside its domain or ask for clarification about another agent's data. Synthesis call uses a `SYNTHESIS_SYSTEM` prompt instructing it to note partial-data gaps in one sentence rather than blocking the answer, and explicitly forbids inventing a causal/explanatory bridge between independent signals (even across 3+ signals) unless an agent's own output already stated that connection.
+
+### Sequential Citation Enforcement
+
+When a node has `depends_on`, `dag_executor.py`'s enrichment string requires the receiving agent to wrap any borrowed figure or claim as `[from prior step: the actual figure or claim]` — plain attribution language ("per the macro analysis above") alone no longer satisfies the requirement; the literal bracket markup is mandatory. This replaced an earlier soft instruction that wasn't reliably followed (downstream agents restated upstream figures as their own verified findings). `_check_unattributed_figures(node_outputs, dag)` then runs once per multi-agent query, after all rounds complete: for every node with non-empty `depends_on`, it flags (regex: `%`, `$`, or decimal numbers) an answer containing a figure but no `[from prior step:` bracket. Soft heuristic — never blocks or rewrites, only prints `[Executor] ⚠️ ATTRIBUTION WARNING: ...` and writes a synthetic `Trace(agent="dag_executor", node_id=None)` record with `attribution_warnings` populated, so warnings are queryable via Athena instead of console-only.
+
+### Reflexion Length-Gate Exception
+
+Both reflexion skip-checks (`reflexion.py`'s per-agent `apply_reflexion()` and `dag_executor.py`'s synthesis tail) gate on `word_count < 200` — but word count alone doesn't correlate with arithmetic risk: a short answer with multiple cited figures and a derived comparison ("compression of 29 bps over the past month") carries real miscalculation risk regardless of length. `_needs_reflexion_despite_length(answer)` (`reflexion.py`) forces reflexion anyway when an answer contains 2+ distinct figures (`_MULTI_FIGURE_PATTERN`: `$`/`%`/decimal numbers) AND derived/comparative language (`_DERIVED_CLAIM_PATTERN`: compress/change/delta/rose/fell/since/compared to/etc.). Found via a real miss: a 148-word MacroAgent answer about yield-curve compression skipped reflexion entirely under the old word-only gate and shipped a wrong basis-point delta. Confirmed via testing this is a meaningful, not perfect, improvement — it only catches the specific multi-figure+comparative risk pattern, not every possible silent miscalculation. `dag_executor.py` imports the same function from `reflexion.py` rather than duplicating the regexes.
 
 ### CLI (`agent.py`)
 
@@ -394,6 +417,35 @@ python query/agent.py --session "q3-analysis" --question "..."
 python query/agent.py --session "q3-analysis"               # interactive REPL
 python query/agent.py --list-sessions / --clear-session "..."
 ```
+
+---
+
+## Eval Harness (`query/evaluations/`)
+
+```
+query/evaluations/
+├── questions.yaml        # eval question set — see schema header comment in the file itself
+├── run_eval.py            # runner: loads questions.yaml, runs each through the REAL planner+executor
+└── results/run_<timestamp>/{results.json, console.log}    # one folder per run
+```
+
+`run_eval.py` runs each active question through the same code path as `agent.py` (no mocking) and scores by `category`:
+
+| Category | Scoring | LLM call? |
+|---|---|---|
+| `routing` | Does the DAG contain the expected agent set (or one of `expected_agents_alternatives`) AND match `expected_dag_shape` (single/parallel/sequential)? | No — pure set/string comparison |
+| `tool_selection` | Did the named agent(s) call the expected tool(s) at least once (pooled across all agents in the DAG, no per-agent attribution)? | No |
+| `grounding` | Does the final answer assert any `forbidden_phrases` concept (even via different wording or a negated/rhetorical restatement), and does it contain `expected_answer_contains` if specified? | Yes — one Haiku judge call (`_judge_grounding_concepts`) per question with `forbidden_phrases` set |
+
+**Grounding check is LLM-as-judge, not substring matching.** The original implementation used a backward-50-char-window substring/negation heuristic that missed two real cases: (1) the model asserting the same claim with different wording (no literal phrase match at all), and (2) the model quoting the forbidden phrase in a heading then negating it in a *later* sentence — outside any backward-looking window. `GROUNDING_JUDGE_SYSTEM` now asks Haiku directly whether the answer's overall position *asserts* each concept, with explicit instructions to NOT flag rhetorical restatement-then-rejection. 11 active `grounding`-category questions as of the schema's current state — one extra Haiku call each, per eval run.
+
+**`expected_agents_alternatives`** (optional, list of agent-name lists) — a question can have more than one legitimately correct routing shape (e.g. sentiment-only vs. sentiment+filings fan-out, when filings turns out empty for the period but cross-referencing it was still a reasonable plan). `score_routing()` checks `actual` against `expected_agents` OR any alternative set. This is a per-question judgment call (not auto-resolved) — used so far only for `GROUND-SENTIMENT-001`.
+
+**`build_summary()`'s failure messages now use `score_routing()`'s own per-check `reasons`** (threaded through via `record["routing_reasons"]`) instead of reconstructing a generic "expected agents X, got Y" string from raw agent lists — the generic reconstruction was misleading whenever the actual failure was a `dag_shape` mismatch (e.g. parallel vs. sequential) with an identical agent SET, making a shape bug look like an agent-list bug.
+
+**Known eval-design findings** (see `questions.yaml`'s trailing comment block and individual `added_reason`/`retired_reason` fields): several "routing failures" found during this work turned out to be genuine, defensible planner non-determinism rather than bugs — the question file's own running commentary on this is the most current record of which routing instabilities are accepted vs. still-open. Notably `GROUND-MARKET-001`'s routing has drifted away from `MarketAgent` across recent runs (consistently landing on `macro` or `filings+macro` instead), meaning the grounding check it was built to exercise (does MarketAgent avoid confabulating a price-spike cause) currently isn't being tested at all — flagged, not yet fixed.
+
+`MERGE-MACRO-SENTIMENT-MARKET-002` (routing, status `retired`) was split into `-002A` (magnitude-framed, expects `market_1` as merge point) and `-002B` (fundamentals-framed, expects `filings_1`) after testing showed the original combined question supported two equally legitimate readings depending on what "justify" meant — see each entry's `added_reason`/`retired_reason` for the full diagnostic trail.
 
 ---
 
@@ -436,3 +488,5 @@ Per-source health check + `--reset`/`--fire` CLI. `SOURCE_CONFIG` dict has an en
 7. **`ingest_news.py`'s `BACKFILL_DAYS` not wired to `news.yaml`** — still the script's own module-level fallback (`args.backfill_days or 90`), unlike `tickers` (now YAML-driven). This was a no-op gap when dev/prod both resolved to 90, but `news.yaml`'s `backfill_days.dev` has since been changed to `1400` externally — that value is currently **not actually read by the script**, so the live effective backfill window may not match what the YAML appears to declare. Worth reconciling.
 8. **Leftover synthetic test rows** from `etl_insiders.py`/`etl_news.py` merge-fix verification are blended into real partitions (`BAC` insider_trades, `BAC`/`JPM`/`USO` news/insiders test rows with `SYNTHETIC-TEST-*`/`UNIT-TEST-*` filing_ids/article_ids) — not cleaned up since removing them requires a read-filter-rewrite per partition, not a simple delete.
 9. **`FILINGS_SYSTEM` (in `sub_agents.py`) still lists only 7 companies** for SEC filings/10-K/10-Q coverage (`AAPL MSFT GOOGL AMZN JPM BAC XOM`), while `sec.yaml` now configures 13 (`ingest_sec.py` confirmed reading `config["companies"]` directly, so all 13 ARE being ingested). Whether `documents`/`documents_prose` already have real data for the 6 new companies (JNJ, WMT, CAT, PG, KO, DIS) depends on whether `etl_sec.py`/`etl_sec_prose.py` have actually been re-run since the YAML expansion — not verified. Either way, FilingsAgent's system prompt is stale and should be updated to match.
+10. **`SENTIMENT_SYSTEM`'s "AVAILABLE TICKERS" block has the identical staleness** — still lists 7 companies for insider trades (`AAPL MSFT GOOGL AMZN JPM BAC XOM`) instead of the 13 `insiders.yaml`/`sec.yaml` now configure, and 11 tickers for news instead of the 17 `news.yaml` configures (13 equities + GLD/USO/TLT/SPY). Same root cause and same fix as gap #9 — not yet applied to either agent's system prompt.
+11. **`run_eval.py`'s `record["planner_reasoning"]` is never actually populated** — initialized to `None` and never set; `plan()` doesn't return its `reasoning` string to callers, only prints it when `verbose=True`. Means eval result JSON never captures *why* the planner chose a given DAG, only the DAG itself — relevant when investigating a routing flip after the fact without re-running.

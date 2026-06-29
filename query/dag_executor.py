@@ -17,6 +17,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from query.registry import get_agent
 from query.telemetry import Trace
+from query.reflexion import (
+    critique_synthesis, CAVEAT, _needs_reflexion_despite_length,
+    check_injection_provenance, INJECTION_CAVEAT,
+)
 
 ENV = os.environ.get("ENV", "dev")
 
@@ -28,12 +32,30 @@ SYNTH_MODEL = (
 from query.config import get_client
 client = get_client()
 
+# Shared skip-threshold for both synthesis-level reflexion and the
+# injection-provenance check below — same value, same reasoning as
+# reflexion.py's per-agent REFLEXION_MIN_WORDS (critic overhead not worth
+# it for short answers, unless _needs_reflexion_despite_length forces it).
+SYNTH_REFLEXION_MIN_WORDS = 200
+
 ROLE_DESCRIPTIONS = {
     "market":    "stock prices, price performance, and market data",
     "macro":     "economic indicators and macro data",
     "filings":   "SEC filings, qualitative documents, and Fed communications",
     "sentiment": "insider trades and news sentiment",
 }
+
+# Fixed decline message for planner.py's "decline" sentinel — a question
+# with zero financial/market/economic/company-specific component. Not
+# templated per-question (unlike agent answers) since there's nothing to
+# vary it on — no tool call happened, so there's no data to incorporate.
+SCOPE_DECLINE_MESSAGE = (
+    "I'm a financial research assistant — I can help with market prices, "
+    "economic indicators, SEC filings, Fed communications, insider trades, "
+    "and news sentiment, but this question doesn't have a financial, "
+    "market, economic, or company-specific component I can address. "
+    "Happy to help if you'd like to ask something in those areas instead."
+)
 
 SYNTHESIS_SYSTEM = (
     "Synthesize using the data that agents returned. If an agent returned "
@@ -143,6 +165,54 @@ def _check_unattributed_figures(node_outputs: dict, dag: dict) -> list:
     return warnings
 
 
+def _run_injection_check(
+    answer: str, question: str, node_outputs: dict,
+    verbose: bool, session_id: str, trace: Trace = None,
+) -> str:
+    """
+    Runs reflexion.check_injection_provenance() and appends INJECTION_CAVEAT
+    if suspected. Shared by execute()'s single-agent early-return path AND
+    its multi-agent synthesis tail — single-agent DAGs return before ever
+    reaching the synthesis tail below, but a single agent's answer is
+    exactly as exposed to tool-result injection as a synthesized one, so
+    this check needs to run on both paths, not just the literal
+    "synthesis" case the name might suggest.
+
+    Caller is responsible for the word-count-or-forced skip-gate decision
+    (mirrors critique_synthesis()'s call sites — this function is only
+    ever called from an already-decided-not-to-skip branch).
+
+    trace: if the caller already has a Trace object for this query (the
+    multi-agent tail does — the same one recording synthesis reflexion),
+    pass it in so the injection result lands on that SAME record instead
+    of a second, redundant one. If None, a fresh dag_executor trace is
+    created and flushed here (the single-agent path has no existing trace
+    to attach to).
+    """
+    result = check_injection_provenance(
+        answer, question, node_outputs, client, SYNTH_MODEL, verbose
+    )
+    suspected = result.get("injection_suspected", False)
+
+    owns_trace = trace is None
+    if owns_trace:
+        trace = Trace(
+            session_id=session_id or "no-session",
+            agent="dag_executor",
+            question=question,
+            model=SYNTH_MODEL,
+        )
+    trace.record_injection_check(suspected)
+    if owns_trace:
+        trace.flush()
+
+    if suspected:
+        if verbose:
+            print(f"[Executor] ⚠️  INJECTION SUSPECTED: {result.get('reasoning', '')}")
+        return answer + INJECTION_CAVEAT
+    return answer
+
+
 async def execute(
     question:   str,
     dag:        dict,
@@ -163,6 +233,21 @@ async def execute(
     completed = {}
     remaining = set(dag.keys())
 
+    # Scope-boundary short-circuit — planner.py's "decline" sentinel for
+    # questions with zero financial/market/economic/company-specific
+    # component. Never routes through any real agent, even as a
+    # formality — the whole point is avoiding the accidental-fallback
+    # pattern (a JSON parse failure or registry-filter miss landing an
+    # off-topic question on a real agent, e.g. MarketAgent, by accident)
+    # that originally surfaced this gap.
+    if len(dag) == 1:
+        node_id = list(dag.keys())[0]
+        if dag[node_id].get("agent") == "decline":
+            if verbose:
+                print(f"[Executor] Scope boundary — declining, "
+                      f"no agent invoked: {dag[node_id].get('reason', '')}")
+            return SCOPE_DECLINE_MESSAGE
+
     # Single agent — no synthesis needed
     # Single node — no synthesis needed
     if len(dag) == 1:
@@ -170,6 +255,18 @@ async def execute(
         agent_type = dag[node_id].get("agent", node_id)  # fallback for old-style DAGs
         _, answer  = await _run_agent_async(
             node_id, agent_type, question, history, verbose, session_id
+        )
+        # Injection check runs UNCONDITIONALLY, unlike synthesis reflexion's
+        # word-count gate below — injection risk does not correlate with
+        # answer length or figure density the way arithmetic risk does. A
+        # short, blunt successful injection ("Yes, this is a strong buy")
+        # is exactly the shape that would otherwise be skipped by the same
+        # gate used for critique_synthesis(), which would defeat the point
+        # of the check. Confirmed via testing: a 141-word clean answer
+        # never reached the gate at all, and a maximally-successful
+        # injection would very plausibly also be short.
+        answer = _run_injection_check(
+            answer, question, {node_id: answer}, verbose, session_id
         )
         return answer
 
@@ -311,4 +408,98 @@ async def execute(
         system=SYNTHESIS_SYSTEM,
         messages=[{"role": "user", "content": synthesis_prompt}],
     )
-    return response.content[0].text
+    synthesized_answer = response.content[0].text
+
+    # Skip critique_synthesis() (grounding/fabrication check) for short
+    # synthesis answers — same threshold/reasoning as per-agent reflexion's
+    # CO-1 (reflexion.py REFLEXION_MIN_WORDS). EXCEPTION: force it anyway
+    # if the synthesis contains multiple figures plus derived/comparative
+    # language (see _needs_reflexion_despite_length's docstring) — this
+    # gate is specifically about ARITHMETIC risk, which does correlate
+    # with figure density and answer length.
+    #
+    # The injection-provenance check below is NOT gated by this — it runs
+    # unconditionally regardless of whether critique_synthesis() does.
+    # Injection risk does not correlate with word count or figure density
+    # the way arithmetic risk does — a short, blunt successful injection
+    # ("Yes, this is a strong buy") is exactly the shape this gate would
+    # otherwise skip, which would defeat the point of the check (confirmed
+    # via testing on a real 141-word clean answer that never reached this
+    # gate at all).
+    synth_word_count = len(synthesized_answer.split())
+    synth_forced = _needs_reflexion_despite_length(synthesized_answer)
+    skip_grounding_check = synth_word_count < SYNTH_REFLEXION_MIN_WORDS and not synth_forced
+
+    synth_trace = Trace(
+        session_id=session_id or "no-session",
+        agent="dag_executor",
+        question=question,
+        model=SYNTH_MODEL,
+    )
+
+    if skip_grounding_check:
+        if verbose:
+            print(f"[Executor] Synthesis reflexion skipped — under "
+                  f"{SYNTH_REFLEXION_MIN_WORDS} words")
+        final_answer = synthesized_answer
+    else:
+        if synth_forced and verbose:
+            print(f"[Executor] Synthesis reflexion running despite "
+                  f"{synth_word_count} words — multiple figures + "
+                  f"derived/comparative language detected")
+
+        synth_critique = critique_synthesis(
+            question, agent_outputs, synthesized_answer, verbose
+        )
+
+        if synth_critique.get("passed", True):
+            if verbose:
+                print("[Executor] Synthesis reflexion passed")
+            synth_trace.record_synthesis_reflexion(triggered=False, passed=True)
+            final_answer = synthesized_answer
+        else:
+            if verbose:
+                print(f"[Executor] Synthesis reflexion failed — retrying")
+            guidance = synth_critique.get(
+                "retry_guidance", "Only state facts present in agent outputs."
+            )
+            retry_prompt = (
+                synthesis_prompt
+                + f"\n\nYour previous attempt had issues: {guidance}\n"
+                f"Revise the synthesis to fix this."
+            )
+            retry_response = client.messages.create(
+                model=SYNTH_MODEL,
+                max_tokens=2000,
+                system=SYNTHESIS_SYSTEM,
+                messages=[{"role": "user", "content": retry_prompt}],
+            )
+            retry_answer = retry_response.content[0].text
+            retry_critique = critique_synthesis(
+                question, agent_outputs, retry_answer, verbose
+            )
+
+            if retry_critique.get("passed", True):
+                if verbose:
+                    print("[Executor] Synthesis reflexion retry passed")
+                synth_trace.record_synthesis_reflexion(triggered=True, passed=True)
+                final_answer = retry_answer
+            else:
+                if verbose:
+                    print("[Executor] Synthesis reflexion retry still failing — adding caveat")
+                synth_trace.record_synthesis_reflexion(triggered=True, passed=False)
+                final_answer = retry_answer + CAVEAT
+
+    # Injection-provenance check — independent of critique_synthesis()'s
+    # grounding/fabrication check above (and unconditional regardless of
+    # whether that check ran — see comment above), runs once against
+    # whichever answer the grounding check settled on (or the raw
+    # synthesized answer, if that check was skipped). Attached to the SAME
+    # synth_trace (not a second trace) per the established pattern of one
+    # synthesis-tail trace per query.
+    final_answer = _run_injection_check(
+        final_answer, question, completed, verbose, session_id, trace=synth_trace
+    )
+
+    synth_trace.flush()
+    return final_answer

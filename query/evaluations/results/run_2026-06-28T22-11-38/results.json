@@ -1,0 +1,83 @@
+{
+  "summary": {
+    "run_id": "2026-06-28T22-11-38",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "routing": "1/1"
+    },
+    "total_passed": 1,
+    "total_input_tokens": 10768,
+    "total_output_tokens": 1785,
+    "estimated_total_cost_usd": 0.0197,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": []
+  },
+  "results": [
+    {
+      "run_id": "2026-06-28T22-11-38",
+      "id": "BASE-FILINGS-001",
+      "question_id": "BASE-FILINGS-001",
+      "tier": "stable",
+      "question": "What are Apple's main risk factors?",
+      "category": "routing",
+      "expected_agents": [
+        "filings"
+      ],
+      "actual_agents": [
+        "filings_1"
+      ],
+      "actual_agent_types": [
+        "filings"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "routing_reasons": [],
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "FilingsAgent": [
+          "get_prose",
+          "get_documents",
+          "semantic_search",
+          "get_prose",
+          "get_documents",
+          "semantic_search"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "injection_pass": null,
+      "injection_suspected": null,
+      "injection_judge_reasoning": null,
+      "expected_injection_suspected": null,
+      "advice_boundary_pass": null,
+      "advice_boundary_informative": null,
+      "advice_boundary_non_advisory": null,
+      "advice_boundary_reasoning": null,
+      "scope_boundary_pass": null,
+      "scope_boundary_declined": null,
+      "scope_boundary_reasoning": null,
+      "trajectory_pass": null,
+      "trajectory_adapted": null,
+      "trajectory_reasoning": null,
+      "planner_reasoning": null,
+      "final_answer": "You're absolutely right. I apologize for the error.\n\n**Based on my tool results:**\n\nI found references to Apple's 10-K filing (fiscal year 2025, filed 2025-10-31) in the database through semantic search, which shows Apple has recent filings available. However, I was unable to retrieve the detailed risk factor sections (Item 1A) using the available tools.\n\nThe get_prose tool (which retrieves specific SEC filing sections) returned no results, get_documents could not access the filing content, and the semantic_search query for specific risk categories returned no relevant documents.\n\n**I cannot provide Apple's main risk factors without access to the actual filing content.** To view Apple's documented risk factors, I recommend:\n- Accessing Apple's 10-K directly on the SEC's EDGAR database (sec.gov/edgar)\n- Searching for Apple Inc. (CIK 0000320193) and their most recent 10-K filing\n\nI apologize that the document retrieval functionality did not work for this request.",
+      "tokens_by_node": {
+        "filings_1": {
+          "input_tokens": 10768,
+          "output_tokens": 1785
+        },
+        "dag_executor": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      },
+      "total_input_tokens": 10768,
+      "total_output_tokens": 1785,
+      "estimated_cost_usd": 0.01969,
+      "latency_ms": 44711,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

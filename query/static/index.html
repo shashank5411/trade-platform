@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trade Platform Agent</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 700px;
+    margin: 40px auto;
+    padding: 0 20px;
+    color: #222;
+  }
+  h1 {
+    font-size: 1.3em;
+  }
+  textarea {
+    width: 100%;
+    height: 80px;
+    font-size: 1em;
+    font-family: inherit;
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  button {
+    margin-top: 8px;
+    padding: 8px 16px;
+    font-size: 1em;
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  #status {
+    margin-top: 16px;
+    color: #666;
+    font-style: italic;
+  }
+  #answer {
+    margin-top: 16px;
+    white-space: pre-wrap;
+    line-height: 1.4;
+  }
+  #answer.error {
+    color: #b00020;
+    font-style: normal;
+  }
+</style>
+</head>
+<body>
+  <h1>Trade Platform Agent</h1>
+  <textarea id="question" placeholder="Ask a question..."></textarea>
+  <br>
+  <button id="submit">Ask</button>
+  <div id="status"></div>
+  <div id="answer"></div>
+
+<script>
+  const sessionId = crypto.randomUUID();
+
+  const questionEl = document.getElementById("question");
+  const submitEl   = document.getElementById("submit");
+  const statusEl   = document.getElementById("status");
+  const answerEl   = document.getElementById("answer");
+
+  async function ask() {
+    const question = questionEl.value.trim();
+    if (!question) return;
+
+    submitEl.disabled = true;
+    answerEl.textContent = "";
+    answerEl.classList.remove("error");
+    statusEl.textContent = "Thinking...";
+
+    try {
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, session_id: sessionId }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Server returned ${res.status}`);
+      }
+
+      const data = await res.json();
+      statusEl.textContent = "";
+      answerEl.textContent = data.answer;
+    } catch (err) {
+      statusEl.textContent = "";
+      answerEl.classList.add("error");
+      answerEl.textContent = "Something went wrong — try again.";
+    } finally {
+      submitEl.disabled = false;
+    }
+  }
+
+  submitEl.addEventListener("click", ask);
+  questionEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask();
+  });
+</script>
+</body>
+</html>

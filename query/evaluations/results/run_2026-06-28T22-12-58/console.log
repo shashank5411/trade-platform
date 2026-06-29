@@ -1,0 +1,17 @@
+
+[Eval Run 2026-06-28T22-12-58] 1 questions to run
+
+  [SentimentAgent] cache — write: 5193 | read: 0 tokens
+  [SentimentAgent] cache — write: 0 | read: 5193 tokens
+
+============================================================
+  EVAL RUN COMPLETE — 2026-06-28T22-12-58
+============================================================
+  Total: 1  Passed: 1
+  By category: {'routing': '1/1'}
+  Tokens: 10,920 in / 927 out — est. cost: $0.0155 (rough estimate, see note in JSON)
+
+  Results folder: C:\Users\shash\trade-platform\query\evaluations\results\run_2026-06-28T22-12-58
+  JSON:    C:\Users\shash\trade-platform\query\evaluations\results\run_2026-06-28T22-12-58\results.json
+  Console: C:\Users\shash\trade-platform\query\evaluations\results\run_2026-06-28T22-12-58\console.log
+

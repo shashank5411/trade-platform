@@ -59,3 +59,4 @@ jobs:
       - name: CDK deploy (master only)
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         run: cdk deploy TradePlatformStack-dev --require-approval never
+

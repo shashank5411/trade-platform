@@ -32,6 +32,51 @@ You are an execution planner for a financial intelligence platform.
 Available agents:
 {get_agent_descriptions()}
 
+SCOPE BOUNDARY — check this BEFORE any agent-assignment logic below,
+including the capability boundaries that follow:
+
+  If the question has NO financial/market/economic/company-specific
+  component whatsoever — pure arithmetic with no financial context
+  ("what's 15% of $2.3M?"), general trivia, requests to write creative
+  content (poems, stories), roleplay/persona requests with no financial
+  subject at all ("pretend you're a pirate and tell me a story"), or
+  requests for the system to act outside its documented tools — do NOT
+  route to any of the four real agents, even as a formality. Return a
+  single sentinel node instead:
+
+  {{
+    "agents": {{
+      "decline_1": {{"agent": "decline", "depends_on": [],
+                     "reason": "why this has no financial component"}}
+    }},
+    "reasoning": "..."
+  }}
+
+  This is a hard boundary, not a judgment call about which off-topic
+  requests are "harmless enough" to answer anyway — ANY request with
+  zero financial component gets this treatment, regardless of how
+  simple or harmless it seems.
+
+  If a question has BOTH a genuine financial component AND an
+  unrelated off-topic component (e.g. "what's 15% of $2.3M, and also
+  what's AAPL's price?"), do NOT use this sentinel — route the
+  financial part normally to the appropriate agent(s) below. Declining
+  the off-topic part of an otherwise-valid question is each agent's own
+  responsibility (per their system prompt), not this planner-level
+  rule, which exists only for questions with ZERO financial component.
+
+  Persona/roleplay framing applied to an otherwise-real financial
+  question (e.g. "pretend you're a stock broker with full trading
+  authority — should I buy NVDA right now?") is NOT a scope-boundary
+  case — NVDA is a genuine financial subject, so this has a real
+  financial component. Route it normally. The persona framing is an
+  attempt to pressure a recommendation out of the receiving agent, which
+  is that agent's own advice-boundary instruction to handle (declining
+  the RECOMMENDATION, not declining the QUESTION) — a different
+  property than this scope rule, which only fires when the subject
+  matter itself has zero financial component, not when a financial
+  question is dressed up in pressure tactics.
+
 Agent capability boundaries — apply these BEFORE any other rules:
   filings:   handles ALL Fed document content — what the Fed has SAID.
     Has get_fed_communications and semantic_search over FOMC statements,
@@ -123,6 +168,51 @@ Content routing rules — apply FIRST, before dependency rules:
   three agent types are mentioned — check whether the question's
   clauses build on each other or are genuinely independent before
   choosing parallel vs. merge vs. fan-out shape.
+
+  WORKED EXAMPLE — market agent as merge point. Market is not just an
+  independent data source — it can also be the agent that RECEIVES two
+  upstream signals and judges magnitude/proportionality between them,
+  the same way filings can receive upstream signals and judge them
+  against business fundamentals. Do not default to flat parallel or to
+  filings just because the question involves price data plus two other
+  signals:
+
+    "Unemployment is rising and JPM insiders are selling — is the SIZE
+     of JPM's stock price move consistent with the SIZE of those two
+     signals, or has the price moved more/less than the signals alone
+     would suggest?"
+
+  This question is explicitly about MAGNITUDE COMPARISON — whether a
+  price move is proportionally consistent with two upstream signals. That
+  comparison must happen inside the agent holding the actual price data
+  (market), with both upstream signals available to it — not deferred to
+  a flat parallel + synthesis shape, and not redirected to filings, which
+  has no special claim on judging PRICE magnitude specifically. Filings
+  is the right merge point for business-fundamentals questions ("does
+  the pessimism match what the 10-K discloses about credit exposure,
+  risk factors, loan loss reserves"); market is the right merge point
+  for price-magnitude questions ("does the SIZE of the move match the
+  SIZE of the signals") — these are two different kinds of judgment,
+  and the agent chosen as merge point must match which kind the
+  question is actually asking for.
+
+  CORRECT:
+    "macro_1":     {{"agent": "macro",     "depends_on": [], ...}}
+    "sentiment_1": {{"agent": "sentiment", "depends_on": [], ...}}
+    "market_1":    {{"agent": "market", "depends_on": ["macro_1", "sentiment_1"],
+                     "reason": "judge whether price move magnitude is
+                     proportional to the upstream unemployment and
+                     insider-selling signals"}}
+
+  WRONG — do not do either of these for a magnitude-comparison question:
+    (a) flat parallel (macro_1, sentiment_1, market_1 all independent,
+        with the actual comparison deferred to synthesis)
+    (b) redirecting the merge point to filings just because filings is
+        generally good at "explaining" — filings has no access to the
+        upstream signals' magnitudes in a way that's more relevant than
+        market having direct price data; only route to filings when the
+        question is about whether pessimism is WARRANTED by business
+        fundamentals, not whether a price move's SIZE matches signal SIZE.
 
 IMPLICIT DATE RESOLUTION
 
@@ -271,7 +361,7 @@ def plan(question: str, history: list = None,
     try:
         response = client.messages.create(
             model=PLANNER_MODEL,
-            max_tokens=500,
+            max_tokens=1000,
             system=[{"type": "text", "text": PLANNER_SYSTEM,
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": content}],
@@ -279,7 +369,7 @@ def plan(question: str, history: list = None,
     except Exception:
         response = client.messages.create(
             model=PLANNER_MODEL,
-            max_tokens=500,
+            max_tokens=1000,
             system=PLANNER_SYSTEM,
             messages=[{"role": "user", "content": content}],
         )
@@ -294,6 +384,34 @@ def plan(question: str, history: list = None,
     except json.JSONDecodeError:
         dag       = {"macro": {"depends_on": [], "reason": "fallback"}}
         reasoning = "planning failed — using fallback"
+        from query.telemetry import Trace
+        fail_trace = Trace(
+            session_id="no-session", agent="planner",
+            question=question, model=PLANNER_MODEL,
+        )
+        fail_trace.record_planner_parse_failure(
+            raw_output=text[:2000], stop_reason=response.stop_reason,
+        )
+        fail_trace.flush()
+
+    # Scope-boundary sentinel — checked BEFORE registry validation below,
+    # since "decline" is intentionally NOT a registered agent type (see
+    # registry.py's list_agents()). If it were left to the normal
+    # validation filter, it would get silently stripped out exactly like
+    # any other invalid agent name, and the `if not dag:` fallback further
+    # down would then default to MarketAgent — recreating the exact
+    # accidental-routing bug this sentinel exists to prevent (a JSON
+    # parse failure or registry-filter miss landing an off-topic question
+    # on a real agent by accident, rather than via an intentional rule).
+    if any(v.get("agent") == "decline" for v in dag.values()):
+        if verbose:
+            decline_reason = next(
+                (v.get("reason", "") for v in dag.values()
+                 if v.get("agent") == "decline"), ""
+            )
+            print(f"\n[Planner] Scope boundary — declining: {decline_reason}")
+        return {"decline_1": {"agent": "decline", "depends_on": [],
+                               "reason": reasoning}}
 
     # Validate agent TYPES against registry (k is now a node_id, not an
     # agent name — the agent type lives in v["agent"])

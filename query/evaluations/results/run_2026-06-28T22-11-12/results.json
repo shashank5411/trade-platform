@@ -1,0 +1,78 @@
+{
+  "summary": {
+    "run_id": "2026-06-28T22-11-12",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "routing": "1/1"
+    },
+    "total_passed": 1,
+    "total_input_tokens": 6888,
+    "total_output_tokens": 263,
+    "estimated_total_cost_usd": 0.0082,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": []
+  },
+  "results": [
+    {
+      "run_id": "2026-06-28T22-11-12",
+      "id": "BASE-MACRO-001",
+      "question_id": "BASE-MACRO-001",
+      "tier": "stable",
+      "question": "What was the unemployment rate in 2023?",
+      "category": "routing",
+      "expected_agents": [
+        "macro"
+      ],
+      "actual_agents": [
+        "macro_1"
+      ],
+      "actual_agent_types": [
+        "macro"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "routing_reasons": [],
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MacroAgent": [
+          "get_indicator"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "injection_pass": null,
+      "injection_suspected": null,
+      "injection_judge_reasoning": null,
+      "expected_injection_suspected": null,
+      "advice_boundary_pass": null,
+      "advice_boundary_informative": null,
+      "advice_boundary_non_advisory": null,
+      "advice_boundary_reasoning": null,
+      "scope_boundary_pass": null,
+      "scope_boundary_declined": null,
+      "scope_boundary_reasoning": null,
+      "trajectory_pass": null,
+      "trajectory_adapted": null,
+      "trajectory_reasoning": null,
+      "planner_reasoning": null,
+      "final_answer": "The unemployment rate in 2023 ranged from **3.4% to 3.9%**, with monthly readings as follows:\n\n- January\u2013March: 3.5\u20133.6%\n- April: 3.4% (lowest point)\n- May\u2013July: 3.5\u20133.6%\n- August\u2013December: 3.7\u20133.9% (with the highest reading of 3.9% in October)\n\nThe trend shows the rate starting the year in the 3.5% range, dipping slightly in April to 3.4%, then gradually climbing through the fall to 3.8\u20133.9%.",
+      "tokens_by_node": {
+        "macro_1": {
+          "input_tokens": 6888,
+          "output_tokens": 263
+        },
+        "dag_executor": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      },
+      "total_input_tokens": 6888,
+      "total_output_tokens": 263,
+      "estimated_cost_usd": 0.0082,
+      "latency_ms": 12773,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

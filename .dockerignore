@@ -1,0 +1,8 @@
+**/__pycache__
+**/*.pyc
+.venv
+cdk.out
+ingestion
+trade_platform
+.git
+query/evaluations

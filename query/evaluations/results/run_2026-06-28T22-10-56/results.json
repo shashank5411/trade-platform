@@ -1,0 +1,78 @@
+{
+  "summary": {
+    "run_id": "2026-06-28T22-10-56",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "routing": "1/1"
+    },
+    "total_passed": 1,
+    "total_input_tokens": 9815,
+    "total_output_tokens": 306,
+    "estimated_total_cost_usd": 0.0114,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": []
+  },
+  "results": [
+    {
+      "run_id": "2026-06-28T22-10-56",
+      "id": "BASE-MARKET-001",
+      "question_id": "BASE-MARKET-001",
+      "tier": "stable",
+      "question": "How did AAPL perform over the last 6 months?",
+      "category": "routing",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market_1"
+      ],
+      "actual_agent_types": [
+        "market"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "routing_reasons": [],
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "injection_pass": null,
+      "injection_suspected": null,
+      "injection_judge_reasoning": null,
+      "expected_injection_suspected": null,
+      "advice_boundary_pass": null,
+      "advice_boundary_informative": null,
+      "advice_boundary_non_advisory": null,
+      "advice_boundary_reasoning": null,
+      "scope_boundary_pass": null,
+      "scope_boundary_declined": null,
+      "scope_boundary_reasoning": null,
+      "trajectory_pass": null,
+      "trajectory_adapted": null,
+      "trajectory_reasoning": null,
+      "planner_reasoning": null,
+      "final_answer": "**AAPL (Apple) Performance - Last 6 Months**\n\n**Period:** December 29, 2025 \u2192 June 15, 2026 (weekly granularity)\n\n**Key Metrics:**\n- **Start Price:** $270.51\n- **End Price:** $298.01\n- **Total Return:** +10.2%\n- **High:** $317.40\n- **Low:** $242.97\n\nApple delivered solid performance over the 6-month period, gaining approximately 10.2% from its starting price. The stock experienced some volatility in the early months (January\u2013March saw prices dip to a low of $242.97 in mid-January), but recovered strongly through April and May, reaching its peak of $317.40 in late May before pulling back slightly by mid-June.",
+      "tokens_by_node": {
+        "market_1": {
+          "input_tokens": 9815,
+          "output_tokens": 306
+        },
+        "dag_executor": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      },
+      "total_input_tokens": 9815,
+      "total_output_tokens": 306,
+      "estimated_cost_usd": 0.01135,
+      "latency_ms": 10476,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

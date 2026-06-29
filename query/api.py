@@ -17,6 +17,7 @@ Partition layout change (Phase 9+):
 
 import json
 import os
+import re
 import sys
 import boto3
 import pandas as pd
@@ -159,15 +160,284 @@ def _ticker_partition(ticker: str) -> str:
     market_prices is partitioned ticker= / year= (Phase 9+).
     Sanitized value matches the S3 path: ^GSPC → ticker=GSPC partition.
     Prunes to one directory before the year= scan — 16x cheaper queries.
+
+    SECURITY NOTE (added in the SQL-hardening pass): _safe_partition_value()
+    above does NOT escape quote characters — it only performs the specific
+    character substitutions needed to mirror etl_yfinance.py's S3 partition
+    naming (^, =, -, .). A ticker containing a single quote would pass
+    through it completely unescaped. _validate_ticker() below is the real
+    security control, applied here BEFORE partition-sanitization.
     """
+    ticker = _validate_ticker(ticker, "ticker")
     safe = _safe_partition_value(ticker)
     return f"AND ticker = '{safe}'"
 
 
 def _ticker_partitions(tickers: list) -> str:
-    """Athena partition pruning hint for a list of tickers (IN clause)."""
+    """Athena partition pruning hint for a list of tickers (IN clause).
+    Same validate-before-sanitize note as _ticker_partition() above."""
+    tickers = [_validate_ticker(t, "ticker") for t in tickers]
     safe_list = "','".join(_safe_partition_value(t) for t in tickers)
     return f"AND ticker IN ('{safe_list}')"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# INPUT VALIDATION (SQL hardening, pre-HTTP-surface)
+# ══════════════════════════════════════════════════════════════════════════
+# api.py builds Athena SQL via f-string interpolation throughout. Safe today
+# only because callers are constrained by Anthropic tool schemas — but tool
+# schemas in tools.py mostly use bare {"type": "string"} with no "pattern"
+# regex constraint, so the schema enforces almost nothing about SHAPE (dates,
+# tickers) even where it does enforce an enum for a fixed value set. These
+# helpers are the real validation layer, applied at the top of every public
+# tool function below, BEFORE any SQL string is built — never trust the
+# schema alone as the only gate.
+#
+# CONFIRMED (live test against this project's real Athena endpoint, see
+# 2026-06-28 session notes): boto3's start_query_execution DOES support
+# genuine "?"-placeholder parameterization via ExecutionParameters, no
+# prepared statement needed. Deliberately NOT used here — that would require
+# threading a `params` list through athena.py's shared query()/cache-key
+# functions (used by every single function in this file), and a correctly
+# anchored allowlist regex is provably equivalent in security outcome to
+# parameterization for every value actually used in this codebase (none of
+# them need characters a reasonable allowlist would exclude). Revisit if a
+# future field genuinely needs unrestricted free text.
+
+class ToolInputError(Exception):
+    """
+    Raised when a tool argument fails validation, before any SQL is built.
+    Caught at the top of each public tool function (mirrors how Athena
+    failures are caught and converted via AthenaQueryError.agent_message())
+    and converted to a clear, agent-facing tool-result string — never lets
+    a malformed value reach Athena, and never lets a raw Python exception
+    string leak back to the agent as the only signal of what went wrong.
+    """
+    def __init__(self, param: str, value, reason: str):
+        self.param  = param
+        self.value  = value
+        self.reason = reason
+        super().__init__(f"{param}={value!r}: {reason}")
+
+    def agent_message(self) -> str:
+        return (
+            f"[INVALID INPUT] parameter '{self.param}' = {self.value!r}\n"
+            f"Reason: {self.reason}\n"
+            f"Fix the value and try again — no query was run."
+        )
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_date(value: Optional[str], param: str,
+                    required: bool = False) -> Optional[str]:
+    """
+    Strict YYYY-MM-DD validation, independent of whatever tools.py's schema
+    claims (no tool schema in this codebase uses JSON Schema's "pattern"
+    keyword, so nothing enforces date SHAPE before it reaches here). Once a
+    value matches this anchored regex AND passes date.fromisoformat() (the
+    regex alone would accept non-existent dates like 2026-13-99), it can
+    only ever contain digits and hyphens — provably safe to interpolate
+    directly into a SQL string literal, equivalent to parameterization for
+    this exact shape.
+    """
+    if value is None:
+        if required:
+            raise ToolInputError(param, value, "required date is missing")
+        return None
+    if not isinstance(value, str) or not _DATE_RE.match(value):
+        raise ToolInputError(param, value, "must be a date in YYYY-MM-DD format")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ToolInputError(param, value, "not a valid calendar date")
+    return value
+
+
+# Covers every real example in api.py/tools.py: AAPL, BRK-B, ^GSPC, CL=F,
+# DX-Y.NYB, NY.GDP.MKTP.CD, GOLDAMGBD228NLBM — letters, digits, and the
+# punctuation that actually appears in real tickers/series IDs. Excludes
+# quotes, semicolons, backslashes, and whitespace.
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-=^&]{1,48}$")
+
+
+def _validate_ticker(value: str, param: str = "ticker") -> str:
+    """Character-allowlist validation for ticker/series-ID-style values.
+    Once a value matches this anchored regex, it cannot contain a
+    quote/semicolon/backslash — safe to interpolate directly, same
+    reasoning as _validate_date()."""
+    if not isinstance(value, str) or not _SAFE_TOKEN_RE.match(value):
+        raise ToolInputError(
+            param, value,
+            "must contain only letters, digits, and . _ - = ^ & characters"
+        )
+    return value
+
+
+# `entity` (get_documents/get_prose) spans TWO genuinely different real
+# shapes, confirmed via live `SELECT DISTINCT entity` against
+# wikipedia_processed.documents (2026-06-28): ticker-style (AAPL, JPM —
+# pure uppercase letters, already covered by _validate_ticker) AND
+# Wikipedia-topic-style (lowercase, underscores, ampersand, regular
+# hyphen, AND en-dash U+2013 specifically — confirmed
+# "2021–2023_inflation_surge" uses U+2013, not a plain hyphen or em-dash).
+# _validate_ticker's character set doesn't include en-dash, so a separate
+# validator is used here rather than broadening the ticker regex for one
+# unrelated shape.
+_ENTITY_RE = re.compile(r"^[A-Za-z0-9_&\-–]{1,64}$")
+
+
+def _validate_entity(value: str, param: str = "entity") -> str:
+    if not isinstance(value, str) or not _ENTITY_RE.match(value):
+        raise ToolInputError(
+            param, value,
+            "must contain only letters, digits, and _ & - (en-dash) characters"
+        )
+    return value
+
+
+def _validate_limit(value, param: str = "limit", default: int = 20,
+                     max_value: int = 1000) -> int:
+    """limit/top_k-style values must be a real positive int within a sane
+    bound — never interpolated as a raw, possibly non-numeric value into
+    a LIMIT clause. Rejects bool explicitly since `isinstance(True, int)`
+    is True in Python and a bool slipping through here would be a real,
+    if unlikely, type-confusion bug."""
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ToolInputError(param, value, "must be an integer")
+    if value < 1 or value > max_value:
+        raise ToolInputError(
+            param, value, f"must be between 1 and {max_value}"
+        )
+    return value
+
+
+def _validate_number(value, param: str, min_value: float = None,
+                      max_value: float = None) -> Optional[float]:
+    """Numeric filter values (e.g. min_market_cap) — never interpolated as
+    a raw possibly non-numeric value into a numeric comparison."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ToolInputError(param, value, "must be a number")
+    if min_value is not None and value < min_value:
+        raise ToolInputError(param, value, f"must be >= {min_value}")
+    if max_value is not None and value > max_value:
+        raise ToolInputError(param, value, f"must be <= {max_value}")
+    return float(value)
+
+
+def _validate_enum(value: Optional[str], param: str, allowed: set,
+                    required: bool = False) -> Optional[str]:
+    """Strict allowlist for structural/categorical values — used both for
+    genuinely fixed value sets (sentiment, transaction_type) and for
+    values that select a STRUCTURAL part of the SQL (database/table via a
+    Python-side dict, never the user's literal string)."""
+    if value is None:
+        if required:
+            raise ToolInputError(param, value, "required")
+        return None
+    if not isinstance(value, str) or value not in allowed:
+        raise ToolInputError(
+            param, value, f"must be one of {sorted(allowed)}"
+        )
+    return value
+
+
+# Free-text fields with no fixed enumerable set (e.g. `industry`, which
+# spans dozens of real values like "Banks—Diversified" using an em-dash,
+# not a hyphen) get a broader character allowlist instead of a fixed set,
+# plus defense-in-depth quote-escaping even though the allowlist already
+# excludes quotes — belt-and-suspenders, costs nothing.
+_FREE_TEXT_RE = re.compile(r"^[\w \t&/.,()—\-]{1,80}$")
+
+
+def _validate_free_text(value: Optional[str], param: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _FREE_TEXT_RE.match(value):
+        raise ToolInputError(
+            param, value,
+            "contains disallowed characters (letters, digits, spaces, "
+            "and & / . , ( ) - — only)"
+        )
+    return value
+
+
+def _sql_escape(value: str) -> str:
+    """Defense-in-depth single-quote escaping for free-text values that
+    already passed _validate_free_text()'s character allowlist — the
+    allowlist excludes quotes already, so this should never have an
+    effect in practice, but doubling embedded quotes is the standard SQL
+    string-literal escape and costs nothing to apply anyway."""
+    return value.replace("'", "''")
+
+
+# ── Structural allowlists ────────────────────────────────────────────────
+# Each confirmed against real schema/documentation, not guessed — see the
+# SQL-hardening session's inventory report for the specific source of each.
+
+# Matches get_companies_in_sector's tool description, get_prices_by_sector's
+# own "no results" error message, AND get_companies_in_sector's own "no
+# results" error message — all three independently list the same 11 GICS
+# sector names used by the `companies` table's `sector` column.
+SECTOR_ALLOWLIST = {
+    "Technology", "Energy", "Financials", "Health Care",
+    "Consumer Discretionary", "Industrials", "Communication Services",
+    "Utilities", "Real Estate", "Materials", "Consumer Staples",
+}
+
+# Matches PROJECT_OVERVIEW.md's documented market_prices schema
+# (exchange STRING NYSE | NASDAQ | INDEX | FX | FUTURES | LSE | NSE) — the
+# REAL 7-value set, wider than tools.py's get_prices description text
+# ("NYSE, NASDAQ, LSE, NSE"), which only lists 4 as illustrative examples,
+# not the complete set. Using the narrower 4-value set here would have
+# rejected legitimate INDEX/FX/FUTURES exchange filters.
+EXCHANGE_ALLOWLIST = {"NYSE", "NASDAQ", "INDEX", "FX", "FUTURES", "LSE", "NSE"}
+
+# Matches get_indicator's tool schema enum exactly.
+INDICATOR_SOURCE_ALLOWLIST = {"FRED", "WORLDBANK"}
+
+# Matches get_indicator's tool description's documented World Bank country
+# list (US, CN, IN, GB, DE, JP, BR) — the actual ETL-ingested set per
+# PROJECT_OVERVIEW.md (5 indicators x 7 countries).
+COUNTRY_ALLOWLIST = {"US", "CN", "IN", "GB", "DE", "JP", "BR"}
+
+# Matches get_prose's tool schema enum for section_name exactly — but
+# section_names (the multi-section array form) has NO enum constraint on
+# its array items in tools.py today, a real schema asymmetry found during
+# this audit. This allowlist closes that gap at the app level.
+SECTION_NAME_ALLOWLIST = {
+    "item_1", "item_1a", "item_7", "item_7a", "note_1", "note_2", "note_3",
+}
+
+# Matches get_prose's tool schema enum for form_type exactly.
+FORM_TYPE_ALLOWLIST = {"10-K", "10-Q"}
+
+# Matches get_documents' tool schema enum for doc_type exactly.
+DOC_TYPE_ALLOWLIST = {"10-K", "10-Q", "wiki_article"}
+
+# Matches get_news's tool schema enum for sentiment exactly.
+SENTIMENT_ALLOWLIST = {"positive", "negative", "neutral"}
+
+# Matches get_insider_trades' tool schema enum for transaction_type exactly.
+TRANSACTION_TYPE_ALLOWLIST = {"P", "S", "A", "D", "F", "M", "X", "G", "J"}
+
+# get_documents' `source` parameter selects which database(s) to query.
+# BUG FOUND during this audit, fixed here: the tool schema's enum is
+# ["EDGAR", "WIKIPEDIA"], but the old implementation did
+# `DB[source.lower()]` against a dict keyed "sec"/"wikipedia" — passing
+# the fully schema-valid source="EDGAR" raised an uncaught KeyError every
+# time. This map is both the security allowlist AND the correct source-
+# name-to-database mapping; `source`'s literal string is never used to
+# build any part of the SQL or build a dict key from user input directly.
+DOCUMENTS_SOURCE_DB = {
+    "EDGAR":     "sec",
+    "WIKIPEDIA": "wikipedia",
+}
 
 
 def _price_summary(df: pd.DataFrame, ticker: str) -> str:
@@ -243,13 +513,23 @@ def get_prices(
     sector:   Optional[str] = None,
     industry: Optional[str] = None,
 ) -> str:
-    ticker          = ticker.upper()
+    try:
+        ticker   = _validate_ticker(ticker.upper(), "ticker")
+        start    = _validate_date(start, "start", required=True)
+        end      = _validate_date(end, "end", required=True)
+        exchange = _validate_enum(exchange, "exchange", EXCHANGE_ALLOWLIST)
+        sector   = _validate_enum(sector, "sector", SECTOR_ALLOWLIST)
+        industry = _validate_free_text(industry, "industry")
+    except ToolInputError as e:
+        return e.agent_message()
+
     granularity     = _price_granularity(start, end)
     yf              = _year_filter(start, end)
     tp              = _ticker_partition(ticker)
     ex_filter       = f"AND exchange = '{exchange}'"  if exchange  else ""
     sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
-    industry_filter = f"AND industry = '{industry}'" if industry  else ""
+    industry_filter = (f"AND industry = '{_sql_escape(industry)}'"
+                        if industry else "")
 
     # 'ticker' is a partition column (sanitized value) — pruning happens
     # via {tp}. The original symbol lives in the 'ticker_symbol' data
@@ -319,14 +599,26 @@ def get_prices_multi(
     sector:   Optional[str] = None,
     industry: Optional[str] = None,
 ) -> str:
-    tickers         = [t.upper() for t in tickers]
-    ticker_list     = "','".join(tickers)
+    try:
+        tickers  = [_validate_ticker(t.upper(), "tickers") for t in tickers]
+        start    = _validate_date(start, "start", required=True)
+        end      = _validate_date(end, "end", required=True)
+        exchange = _validate_enum(exchange, "exchange", EXCHANGE_ALLOWLIST)
+        sector   = _validate_enum(sector, "sector", SECTOR_ALLOWLIST)
+        industry = _validate_free_text(industry, "industry")
+    except ToolInputError as e:
+        return e.agent_message()
+
+    # NOTE: ticker_list was computed here in the pre-hardening version but
+    # never actually referenced anywhere in this function — dead code,
+    # removed (not a security issue, just noise found during this audit).
     granularity     = _price_granularity(start, end)
     yf              = _year_filter(start, end)
     tps             = _ticker_partitions(tickers)
     ex_filter       = f"AND exchange = '{exchange}'"  if exchange  else ""
     sector_filter   = f"AND sector = '{sector}'"     if sector    else ""
-    industry_filter = f"AND industry = '{industry}'" if industry  else ""
+    industry_filter = (f"AND industry = '{_sql_escape(industry)}'"
+                        if industry else "")
 
     # 'ticker' is a partition column (sanitized values) — pruning happens
     # via {tps}. Original symbols live in 'ticker_symbol', recovered via
@@ -408,9 +700,18 @@ def get_prices_by_sector(
     end:      str,
     industry: Optional[str] = None,
 ) -> str:
+    try:
+        sector   = _validate_enum(sector, "sector", SECTOR_ALLOWLIST, required=True)
+        start    = _validate_date(start, "start", required=True)
+        end      = _validate_date(end, "end", required=True)
+        industry = _validate_free_text(industry, "industry")
+    except ToolInputError as e:
+        return e.agent_message()
+
     # Sector scan is intentional — no ticker partition filter here
     yf              = _year_filter(start, end)
-    industry_filter = f"AND industry = '{industry}'" if industry else ""
+    industry_filter = (f"AND industry = '{_sql_escape(industry)}'"
+                        if industry else "")
 
     sql = f"""
         SELECT ticker_symbol AS ticker, sector, industry,
@@ -448,7 +749,13 @@ def get_price_on_date(
     date_str: str,
     exchange: Optional[str] = None
 ) -> str:
-    ticker    = ticker.upper()
+    try:
+        ticker   = _validate_ticker(ticker.upper(), "ticker")
+        date_str = _validate_date(date_str, "date_str", required=True)
+        exchange = _validate_enum(exchange, "exchange", EXCHANGE_ALLOWLIST)
+    except ToolInputError as e:
+        return e.agent_message()
+
     as_of_yr  = int(date_str[:4])
     tp        = _ticker_partition(ticker)
     ex_filter = f"AND exchange = '{exchange}'" if exchange else ""
@@ -491,8 +798,15 @@ def get_prices_on_date(
     date_str: str,
     exchange: Optional[str] = None
 ) -> str:
-    tickers     = [t.upper() for t in tickers]
-    ticker_list = "','".join(tickers)
+    try:
+        tickers  = [_validate_ticker(t.upper(), "tickers") for t in tickers]
+        date_str = _validate_date(date_str, "date_str", required=True)
+        exchange = _validate_enum(exchange, "exchange", EXCHANGE_ALLOWLIST)
+    except ToolInputError as e:
+        return e.agent_message()
+
+    # NOTE: ticker_list computed but never referenced — same dead-code
+    # finding as get_prices_multi, removed.
     as_of_yr    = int(date_str[:4])
     tps         = _ticker_partitions(tickers)
     ex_filter   = f"AND exchange = '{exchange}'" if exchange else ""
@@ -609,6 +923,20 @@ def get_indicator(
     source:    Optional[str] = None,
     as_of:     Optional[str] = None,
 ) -> str:
+    # NOTE: `as_of` is accepted but never referenced anywhere in this
+    # function body — dead parameter, found during this audit, not a
+    # security issue since an unused value can never reach SQL. Left
+    # as-is rather than removing the parameter, since that's a behavior/
+    # API-shape change outside this task's scope (SQL hardening only).
+    try:
+        series_id = _validate_ticker(series_id, "series_id")
+        start     = _validate_date(start, "start", required=True)
+        end       = _validate_date(end, "end", required=True)
+        country   = _validate_enum(country, "country", COUNTRY_ALLOWLIST)
+        source    = _validate_enum(source, "source", INDICATOR_SOURCE_ALLOWLIST)
+    except ToolInputError as e:
+        return e.agent_message()
+
     db             = _indicator_db(series_id, source)
     country_filter = f"AND country = '{country}'" if country else ""
     native_freq    = _get_native_frequency(series_id, db)
@@ -645,6 +973,20 @@ def get_indicator_multi(
     countries:  Optional[list] = None,
     source:     Optional[str]  = None,
 ) -> str:
+    try:
+        series_ids = [_validate_ticker(s, "series_ids") for s in series_ids]
+        start      = _validate_date(start, "start", required=True)
+        end        = _validate_date(end, "end", required=True)
+        source     = _validate_enum(source, "source", INDICATOR_SOURCE_ALLOWLIST)
+        if countries:
+            # required=False (default) — individual list entries may
+            # legitimately be None (e.g. get_macro_snapshot's DEFAULT_MACRO
+            # mixes None with "US"); only non-None entries get validated.
+            countries = [_validate_enum(c, "countries", COUNTRY_ALLOWLIST)
+                         for c in countries]
+    except ToolInputError as e:
+        return e.agent_message()
+
     results           = []
     granularities_used = []
 
@@ -694,6 +1036,16 @@ def get_indicator_on_date(
     countries:  Optional[list] = None,
     source:     Optional[str]  = None,
 ) -> str:
+    try:
+        series_ids = [_validate_ticker(s, "series_ids") for s in series_ids]
+        date_str   = _validate_date(date_str, "date_str", required=True)
+        source     = _validate_enum(source, "source", INDICATOR_SOURCE_ALLOWLIST)
+        if countries:
+            countries = [_validate_enum(c, "countries", COUNTRY_ALLOWLIST)
+                         for c in countries]
+    except ToolInputError as e:
+        return e.agent_message()
+
     as_of_yr = int(date_str[:4])
     results  = []
     errors   = []
@@ -768,9 +1120,20 @@ def get_documents(
     limit:    int = 3,
     source:   Optional[str] = None
 ) -> str:
-    entity          = entity.upper() if not entity[0].islower() else entity
+    try:
+        if not entity:
+            raise ToolInputError("entity", entity, "must be a non-empty string")
+        entity   = entity.upper() if not entity[0].islower() else entity
+        entity   = _validate_entity(entity, "entity")
+        doc_type = _validate_enum(doc_type, "doc_type", DOC_TYPE_ALLOWLIST)
+        start    = _validate_date(start, "start")
+        end      = _validate_date(end, "end")
+        limit    = _validate_limit(limit, "limit", default=3, max_value=50)
+        source   = _validate_enum(source, "source", set(DOCUMENTS_SOURCE_DB))
+    except ToolInputError as e:
+        return e.agent_message()
+
     source_filter   = f"AND source = '{source}'"      if source   else ""
-    doc_type_filter = f"AND form_type = '{doc_type}'" if doc_type else ""
     date_filters    = ""
     year_filter     = ""
 
@@ -780,16 +1143,37 @@ def get_documents(
         year_filter  = f"AND CAST(year AS INTEGER) BETWEEN {sy} AND {ey}"
         date_filters = f"AND doc_date BETWEEN '{start}' AND '{end}'"
 
+    # BUG FIX (found during this audit, see DOCUMENTS_SOURCE_DB's comment):
+    # the old `[DB[source.lower()]]` raised an uncaught KeyError for the
+    # fully schema-valid source="EDGAR"/"WIKIPEDIA" — DB's keys are
+    # "sec"/"wikipedia", not "edgar"/"wikipedia". DOCUMENTS_SOURCE_DB maps
+    # the real schema enum values to the real DB dict keys.
     databases = (
-        [DB[source.lower()]] if source
+        [DB[DOCUMENTS_SOURCE_DB[source]]] if source
         else [DB["sec"], DB["wikipedia"]]
     )
 
+    # The `documents` table's type column is NOT consistently named across
+    # databases — confirmed via live `DESCRIBE documents` (2026-06-25):
+    # sec_processed has it as the `form_type` PARTITION column (etl_sec.py
+    # writes the S3 path as form_type={type}/ and drops doc_type from the
+    # Parquet data entirely — see its write_partition()); wikipedia_processed
+    # has no such partition at all and keeps `doc_type` as a flat data
+    # column instead. This is a genuine, intentional ETL-level difference
+    # between the two pipelines, not an accidental crawler rename — so the
+    # fix is a per-database column map, not a single corrected column name.
+    TYPE_COLUMN_BY_DB = {
+        DB["sec"]:       "form_type",
+        DB["wikipedia"]: "doc_type",
+    }
+
     all_results = []
     for db in databases:
+        type_col        = TYPE_COLUMN_BY_DB.get(db, "doc_type")
+        doc_type_filter = f"AND {type_col} = '{doc_type}'" if doc_type else ""
         sql = f"""
             SELECT doc_id, source, title, entity,
-                   form_type as doc_type, doc_date, char_count, text
+                   {type_col} as doc_type, doc_date, char_count, text
             FROM   documents
             WHERE  entity = '{entity}'
               {source_filter}
@@ -823,6 +1207,9 @@ def get_documents(
     return "\n\n".join(output)
 
 
+FEDSPEAK_DOC_TYPE_ALLOWLIST = {"statement", "minutes", "transcript", "speech"}
+
+
 def get_fed_communications(
     doc_type: Optional[str] = None,
     start: Optional[str] = None,
@@ -830,6 +1217,15 @@ def get_fed_communications(
     entity: Optional[str] = None,
     limit: int = 5,
 ) -> str:
+    try:
+        doc_type = _validate_enum(doc_type, "doc_type", FEDSPEAK_DOC_TYPE_ALLOWLIST)
+        start    = _validate_date(start, "start")
+        end      = _validate_date(end, "end")
+        entity   = _validate_entity(entity, "entity") if entity else None
+        limit    = _validate_limit(limit, "limit", default=5, max_value=10)
+    except ToolInputError as e:
+        return e.agent_message()
+
     db      = f"{ENV}_trade_fedspeak_processed"
     table   = "documents"
     filters = ["source = 'FEDSPEAK'"]
@@ -899,8 +1295,33 @@ def get_prose(
     limit:         int  = 3,
     max_chars:     int  = PROSE_DEFAULT_CHARS,
 ) -> str:
-    entity    = entity.upper()
-    max_chars = min(max_chars, PROSE_MAX_CHARS)
+    try:
+        if not entity:
+            raise ToolInputError("entity", entity, "must be a non-empty string")
+        entity = _validate_entity(entity.upper(), "entity")
+        section_name = _validate_enum(
+            section_name, "section_name", SECTION_NAME_ALLOWLIST
+        )
+        if section_names:
+            # BUG FOUND during this audit: tools.py's schema enum
+            # constrains the single-section `section_name` field but NOT
+            # `section_names`' array items — a real asymmetry. This
+            # allowlist closes that gap at the app level.
+            section_names = [
+                _validate_enum(s, "section_names", SECTION_NAME_ALLOWLIST,
+                               required=True)
+                for s in section_names
+            ]
+        form_type = _validate_enum(form_type, "form_type", FORM_TYPE_ALLOWLIST)
+        start     = _validate_date(start, "start")
+        end       = _validate_date(end, "end")
+        limit     = _validate_limit(limit, "limit", default=3, max_value=50)
+        max_chars = _validate_limit(
+            max_chars, "max_chars", default=PROSE_DEFAULT_CHARS,
+            max_value=PROSE_MAX_CHARS,
+        )
+    except ToolInputError as e:
+        return e.agent_message()
 
     if section_names:
         section_list   = "','".join(section_names)
@@ -1055,6 +1476,18 @@ def get_news(
     publisher_tier: Optional[int] = None,
     limit: int = 10,
 ) -> str:
+    try:
+        ticker         = _validate_ticker(ticker, "ticker")
+        start          = _validate_date(start, "start")
+        end            = _validate_date(end, "end")
+        sentiment      = _validate_enum(sentiment, "sentiment", SENTIMENT_ALLOWLIST)
+        publisher_tier = _validate_limit(
+            publisher_tier, "publisher_tier", default=None, max_value=3
+        )
+        limit          = _validate_limit(limit, "limit", default=10, max_value=100)
+    except ToolInputError as e:
+        return e.agent_message()
+
     filters = [f"primary_ticker = '{ticker}'"]
 
     if start:
@@ -1118,6 +1551,16 @@ def get_news_summary(
     end: Optional[str] = None,
     publisher_tier: Optional[int] = None,
 ) -> str:
+    try:
+        ticker         = _validate_ticker(ticker, "ticker")
+        start          = _validate_date(start, "start")
+        end            = _validate_date(end, "end")
+        publisher_tier = _validate_limit(
+            publisher_tier, "publisher_tier", default=None, max_value=3
+        )
+    except ToolInputError as e:
+        return e.agent_message()
+
     filters = [f"primary_ticker = '{ticker}'"]
 
     if start:
@@ -1187,6 +1630,17 @@ def get_insider_trades(
     transaction_type: Optional[str] = None,
     limit: int = 20,
 ) -> str:
+    try:
+        ticker           = _validate_ticker(ticker, "ticker")
+        start            = _validate_date(start, "start")
+        end              = _validate_date(end, "end")
+        transaction_type = _validate_enum(
+            transaction_type, "transaction_type", TRANSACTION_TYPE_ALLOWLIST
+        )
+        limit            = _validate_limit(limit, "limit", default=20, max_value=200)
+    except ToolInputError as e:
+        return e.agent_message()
+
     filters = [f"ticker = '{ticker}'"]
 
     if start:
@@ -1254,6 +1708,13 @@ def get_insider_summary(
     start: Optional[str] = None,
     end: Optional[str] = None,
 ) -> str:
+    try:
+        ticker = _validate_ticker(ticker, "ticker")
+        start  = _validate_date(start, "start")
+        end    = _validate_date(end, "end")
+    except ToolInputError as e:
+        return e.agent_message()
+
     filters = [f"ticker = '{ticker}'"]
     if start:
         filters.append(f"transaction_date >= '{start}'")
@@ -1364,12 +1825,21 @@ def get_companies_in_sector(
     min_market_cap: Optional[float] = None,
     sp500_only: bool = False,
 ) -> str:
+    try:
+        sector         = _validate_enum(sector, "sector", SECTOR_ALLOWLIST,
+                                         required=True)
+        industry       = _validate_free_text(industry, "industry")
+        min_market_cap = _validate_number(min_market_cap, "min_market_cap",
+                                           min_value=0)
+    except ToolInputError as e:
+        return e.agent_message()
+
     db    = DB["yfinance"]
     table = "companies"
 
     filters = [f"sector = '{sector}'"]
     if industry:
-        filters.append(f"industry = '{industry}'")
+        filters.append(f"industry = '{_sql_escape(industry)}'")
     if min_market_cap:
         filters.append(f"market_cap >= {min_market_cap}")
     if sp500_only:
