@@ -57,7 +57,19 @@
   <div id="answer"></div>
 
 <script>
-  const sessionId = crypto.randomUUID();
+  function generateSessionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    // Fallback for insecure (http://) contexts where randomUUID is unavailable
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  const sessionId = generateSessionId();
 
   const questionEl = document.getElementById("question");
   const submitEl   = document.getElementById("submit");
