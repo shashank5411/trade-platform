@@ -22,8 +22,13 @@
     padding: 8px;
     box-sizing: border-box;
   }
-  button {
+  .button-row {
     margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  button {
     padding: 8px 16px;
     font-size: 1em;
     cursor: pointer;
@@ -31,6 +36,12 @@
   button:disabled {
     cursor: default;
     opacity: 0.6;
+  }
+  #new-chat {
+    background: none;
+    border: 1px solid #aaa;
+    color: #555;
+    font-size: 0.9em;
   }
   #status {
     margin-top: 16px;
@@ -51,28 +62,36 @@
 <body>
   <h1>Trade Platform Agent</h1>
   <textarea id="question" placeholder="Ask a question..."></textarea>
-  <br>
-  <button id="submit">Ask</button>
+  <div class="button-row">
+    <button id="submit">Ask</button>
+    <button id="new-chat" title="Start a new conversation">New Chat</button>
+  </div>
   <div id="status"></div>
   <div id="answer"></div>
 
 <script>
   function generateSessionId() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    try {
       return crypto.randomUUID();
+    } catch {
+      // Fallback for HTTP (non-HTTPS) contexts where randomUUID is unavailable
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
     }
-    // Fallback for insecure (http://) contexts where randomUUID is unavailable
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
   }
 
-  const sessionId = generateSessionId();
+  // Persist session across page reloads; a "New Chat" resets it.
+  let sessionId = localStorage.getItem('trade_session_id');
+  if (!sessionId) {
+    sessionId = generateSessionId();
+    localStorage.setItem('trade_session_id', sessionId);
+  }
 
   const questionEl = document.getElementById("question");
   const submitEl   = document.getElementById("submit");
+  const newChatEl  = document.getElementById("new-chat");
   const statusEl   = document.getElementById("status");
   const answerEl   = document.getElementById("answer");
 
@@ -108,7 +127,17 @@
     }
   }
 
+  function newChat() {
+    sessionId = generateSessionId();
+    localStorage.setItem('trade_session_id', sessionId);
+    questionEl.value = "";
+    answerEl.textContent = "";
+    answerEl.classList.remove("error");
+    statusEl.textContent = "";
+  }
+
   submitEl.addEventListener("click", ask);
+  newChatEl.addEventListener("click", newChat);
   questionEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask();
   });

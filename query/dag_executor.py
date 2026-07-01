@@ -219,6 +219,7 @@ async def execute(
     history:    list = None,
     verbose:    bool = True,
     session_id: str  = None,
+    summary:    str  = None,
 ) -> str:
     """
     Execute a DAG plan and return synthesized answer.
@@ -401,6 +402,11 @@ async def execute(
         f"do not call this a disagreement or discrepancy unless the "
         f"sources were supposed to be measuring the identical series."
     )
+    if summary:
+        synthesis_prompt += (
+            f"\n\n<prior_session_context>\n{summary}\n</prior_session_context>"
+            f"\n\nAvoid re-explaining facts already confirmed in prior_session_context."
+        )
 
     response = client.messages.create(
         model=SYNTH_MODEL,

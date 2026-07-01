@@ -9,7 +9,7 @@ import argparse
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from query.memory       import save_turn, load_turns, list_sessions, clear_session
+from query.memory       import save_turn, load_turns, load_context, list_sessions, clear_session
 from query.orchestrator import run as orchestrate
 
 ENV = os.environ.get("ENV", "dev")
@@ -48,18 +48,16 @@ def run_question(
 ) -> str:
     """Run a single question through the orchestrator with memory."""
 
-    # Load history
-    history = []
-    if use_memory and session_id:
-        history = load_turns(session_id)
-        if history and verbose:
-            print(f"[Memory] loaded {len(history)} prior turns "
-            f"from session '{session_id}'")
-            
+    # Load context (summary + recent turns) instead of flat history
+    context = load_context(session_id) if (use_memory and session_id) else None
+    if context and context.get("recent_turns") and verbose:
+        print(f"[Memory] loaded {len(context['recent_turns'])} recent turns "
+              f"from session '{session_id}'")
+
     # Run through orchestrator
     answer = orchestrate(
         question,
-        history=history,
+        context=context,
         verbose=verbose,
         session_id=session_id,
     )

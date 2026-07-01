@@ -17,22 +17,40 @@ from query.dag_executor import execute
 
 def run(
     question:   str,
-    history:    list = None,
+    context:    dict = None,
     verbose:    bool = True,
     session_id: str  = None,
 ) -> str:
     """
     Route question through DAG planner and executor.
-    Entry point for agent.py — synchronous wrapper around async execute.
-    """
-    history = history or []
+    Entry point for agent.py and server.py — synchronous wrapper around async execute.
 
-    dag = plan(question, history=history, verbose=verbose)
+    context dict (from memory.load_context):
+        { "summary": str|None, "context_note": str|None, "recent_turns": list }
+    Pass context=None for no-memory mode (--no-memory CLI flag).
+    """
+    if context is None:
+        context = {"summary": None, "context_note": None, "recent_turns": []}
+
+    summary      = context.get("summary")
+    context_note = context.get("context_note")
+    recent_turns = context.get("recent_turns", [])
+
+    # Prepend the 1-2 sentence context note so sub-agents know what the
+    # user has been exploring, without bloating their context with the
+    # full structured summary.
+    enriched_question = question
+    if context_note:
+        enriched_question = f"[Session context: {context_note}]\n\n{question}"
+
+    dag = plan(enriched_question, history=recent_turns, verbose=verbose,
+               summary=summary)
 
     return asyncio.run(execute(
-        question=question,
+        question=enriched_question,
         dag=dag,
-        history=history,
+        history=recent_turns,
         verbose=verbose,
         session_id=session_id,
+        summary=summary,
     ))

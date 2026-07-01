@@ -340,11 +340,16 @@ WHEN TO REPEAT AN AGENT (multi-hop chains):
 
 
 def plan(question: str, history: list = None,
-         verbose: bool = True) -> dict:
+         verbose: bool = True, summary: str = None) -> dict:
     """
     Produce a DAG execution plan for a question.
     Returns dict of agent_name -> {depends_on, reason}
+    summary: structured rolling summary from memory.load_context, for entity-aware routing.
     """
+    context_block = ""
+    if summary:
+        context_block = f"<session_memory>\n{summary}\n</session_memory>\n\n"
+
     if history:
         recent  = history[-4:]
         context = "\n".join([
@@ -352,11 +357,12 @@ def plan(question: str, history: list = None,
             for t in recent
         ])
         content = (
+            f"{context_block}"
             f"Conversation context:\n{context}\n\n"
             f"New question: {question}"
         )
     else:
-        content = question
+        content = context_block + question
 
     try:
         response = client.messages.create(
