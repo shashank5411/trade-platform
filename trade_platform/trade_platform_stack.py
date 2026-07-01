@@ -279,6 +279,65 @@ class TradePlatformStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
 
+        # ── EC2 role — import existing, manage all permissions here ──────────────
+        ec2_role = iam.Role.from_role_name(
+        self, "EC2Role",
+        role_name="trade-platform-ec2-role"
+        )
+
+        # Conversations table — memory layer
+        conversation_table.grant_read_write_data(ec2_role)
+
+        # All data buckets — agents need to read processed data
+        for layer_buckets in buckets.values():
+            for bucket in layer_buckets.values():
+                bucket.grant_read(ec2_role)
+
+        # LLMOps — telemetry writes
+        llmops_bucket.grant_read_write(ec2_role)
+
+        # Athena results bucket — queries write here
+        athena_results_bucket = s3.Bucket.from_bucket_name(
+            self, "AthenaResultsBucket",
+            f"dev-trade-athena-results-{Aws.ACCOUNT_ID}"
+        )
+        athena_results_bucket.grant_read_write(ec2_role)
+
+        
+        # Athena + Glue — query execution
+        ec2_role.add_to_policy(iam.PolicyStatement(
+            sid="AthenaQueryAccess",
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "athena:StartQueryExecution",
+                "athena:GetQueryExecution",
+                "athena:GetQueryResults",
+                "athena:StopQueryExecution",
+                "glue:GetTable",
+                "glue:GetDatabase",
+                "glue:GetPartitions",
+            ],
+            resources=["*"],
+        ))
+
+        # Bedrock — LLM calls from EC2
+        ec2_role.add_to_policy(iam.PolicyStatement(
+            sid="BedrockEC2Access",
+            effect=iam.Effect.ALLOW,
+            actions=["bedrock:InvokeModel"],
+            resources=["*"],
+        ))
+
+        # S3 Vectors — semantic search
+        ec2_role.add_to_policy(iam.PolicyStatement(
+            sid="S3VectorsEC2Access",
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "s3vectors:QueryVectors",
+                "s3vectors:GetVectors",
+            ],
+            resources=["*"],
+        ))
         # ── Secrets Manager (API keys) ────────────────────────────────────────
         fred_secret = secretsmanager.Secret(
             self, "FredApiKey",
@@ -294,6 +353,9 @@ class TradePlatformStack(Stack):
                 f"trade-platform/{env_name}/anthropic-api-key",
         )
 
+        anthropic_secret.grant_read(ec2_role)
+        sec_prose_bucket.grant_read(ec2_role)
+        
         # ── Glue ingestion job role ───────────────────────────────────────────
         job_role = iam.Role(
             self, "GlueIngestionJobRole",
@@ -1321,3 +1383,8 @@ class TradePlatformStack(Stack):
             )],
             description=f"[{env_name}] Manual entry point for insider trades ingestion",
         )
+
+        # ── EC2 late grants — these buckets are defined after ec2_role import ────
+        fedspeak_processed_bucket.grant_read(ec2_role)
+        news_processed_bucket.grant_read(ec2_role)
+        insiders_processed_bucket.grant_read(ec2_role)

@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:DeleteItem",
+      "dynamodb:BatchWriteItem"
+    ],
+    "Resource": "arn:aws:dynamodb:us-east-2:197411402303:table/trade-platform-dev-conversations"
+  }]
+}
