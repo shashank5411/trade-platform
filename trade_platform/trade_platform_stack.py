@@ -304,40 +304,40 @@ class TradePlatformStack(Stack):
         athena_results_bucket.grant_read_write(ec2_role)
 
         
-        # Athena + Glue — query execution
-        ec2_role.add_to_policy(iam.PolicyStatement(
-            sid="AthenaQueryAccess",
-            effect=iam.Effect.ALLOW,
-            actions=[
-                "athena:StartQueryExecution",
-                "athena:GetQueryExecution",
-                "athena:GetQueryResults",
-                "athena:StopQueryExecution",
-                "glue:GetTable",
-                "glue:GetDatabase",
-                "glue:GetPartitions",
-            ],
-            resources=["*"],
-        ))
-
-        # Bedrock — LLM calls from EC2
-        ec2_role.add_to_policy(iam.PolicyStatement(
-            sid="BedrockEC2Access",
-            effect=iam.Effect.ALLOW,
-            actions=["bedrock:InvokeModel"],
-            resources=["*"],
-        ))
-
-        # S3 Vectors — semantic search
-        ec2_role.add_to_policy(iam.PolicyStatement(
-            sid="S3VectorsEC2Access",
-            effect=iam.Effect.ALLOW,
-            actions=[
-                "s3vectors:QueryVectors",
-                "s3vectors:GetVectors",
-            ],
-            resources=["*"],
-        ))
+        ec2_policy = iam.Policy(self, "EC2RolePolicy",
+            statements=[
+                iam.PolicyStatement(
+                sid="AthenaQueryAccess",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "athena:StartQueryExecution",
+                    "athena:GetQueryExecution",
+                    "athena:GetQueryResults",
+                    "athena:StopQueryExecution",
+                    "glue:GetTable",
+                    "glue:GetDatabase",
+                    "glue:GetPartitions",
+                ],
+                resources=["*"],
+                ),
+            iam.PolicyStatement(
+                sid="BedrockEC2Access",
+                effect=iam.Effect.ALLOW,
+                actions=["bedrock:InvokeModel"],
+                resources=["*"],
+            ),
+            iam.PolicyStatement(
+                sid="S3VectorsEC2Access",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "s3vectors:QueryVectors",
+                    "s3vectors:GetVectors",
+                ],
+                resources=["*"],
+                ),
+            ]
+        )
+        ec2_policy.attach_to_role(ec2_role)
         # ── Secrets Manager (API keys) ────────────────────────────────────────
         fred_secret = secretsmanager.Secret(
             self, "FredApiKey",
