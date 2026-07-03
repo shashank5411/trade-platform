@@ -246,38 +246,64 @@ def get_evals() -> dict:
     return {"latest": runs[0] if runs else None, "runs": runs}
 
 
-def get_telemetry(limit: int = 50) -> list:
+def get_telemetry(limit: int = 25) -> list:
     """
-    List and lightly parse recent trace files from the LLMOps S3 bucket.
-    Prefix assumed to be 'traces/' — adjust if telemetry.py uses a different path.
+    List and parse recent per-agent trace files from the LLMOps S3 bucket.
+    Traces are partitioned as traces/year=YYYY/month=MM/AgentName_uuid.json.
+    Targets current + previous month only to avoid full-bucket listing (1000+ files).
+
+    One trace = one agent run. A 3-agent query produces 3 trace files.
     """
-    try:
-        paginator   = _s3.get_paginator("list_objects_v2")
-        all_objects = []
-        for page in paginator.paginate(Bucket=LLMOPS_BUCKET, Prefix="traces/"):
-            all_objects.extend(page.get("Contents", []))
+    from datetime import date
 
-        if not all_objects:
-            return []
+    today = date.today()
+    prev_year  = today.year - 1 if today.month == 1 else today.year
+    prev_month = 12 if today.month == 1 else today.month - 1
+    prefixes = [
+        f"traces/year={today.year}/month={today.month:02d}/",
+        f"traces/year={prev_year}/month={prev_month:02d}/",
+    ]
 
-        recent  = sorted(all_objects, key=lambda o: o["LastModified"], reverse=True)[:limit]
-        records = []
+    all_objects = []
+    for prefix in prefixes:
+        try:
+            paginator = _s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=LLMOPS_BUCKET, Prefix=prefix):
+                all_objects.extend(page.get("Contents", []))
+        except Exception:
+            continue
 
-        for obj in recent:
-            try:
-                body  = _s3.get_object(Bucket=LLMOPS_BUCKET, Key=obj["Key"])["Body"].read()
-                trace = json.loads(body)
-                records.append({
-                    "timestamp":      _fmt_dt(obj["LastModified"]),
-                    "question":       (trace.get("question") or "")[:100],
-                    "agents":         trace.get("agents_used") or trace.get("agents") or [],
-                    "total_cost_usd": trace.get("total_cost_usd") or trace.get("cost_usd"),
-                    "latency_s":      trace.get("latency_s") or trace.get("total_latency_s"),
-                    "reflexion_pass": trace.get("reflexion_pass"),
-                })
-            except Exception:
-                continue
+    if not all_objects:
+        return []
 
-        return records
-    except Exception as e:
-        return [{"error": str(e)}]
+    recent  = sorted(all_objects, key=lambda o: o["LastModified"], reverse=True)[:limit]
+    records = []
+
+    for obj in recent:
+        key = obj["Key"]
+        if "test" in key:
+            continue
+        try:
+            body  = _s3.get_object(Bucket=LLMOPS_BUCKET, Key=key)["Body"].read()
+            trace = json.loads(body)
+            records.append({
+                "timestamp":           _fmt_dt(obj["LastModified"]),
+                "trace_id":            trace.get("trace_id"),
+                "session_id":          trace.get("session_id"),
+                "agent":               trace.get("agent"),
+                "node_id":             trace.get("node_id"),
+                "question":            (trace.get("question") or "")[:120],
+                "iterations":          trace.get("iterations"),
+                "total_tokens":        trace.get("total_tokens"),
+                "input_tokens":        trace.get("input_tokens"),
+                "output_tokens":       trace.get("output_tokens"),
+                "latency_s":           round(trace["latency_ms"] / 1000, 2) if trace.get("latency_ms") else None,
+                "reflexion_triggered": trace.get("reflexion_triggered"),
+                "reflexion_passed":    trace.get("reflexion_passed"),
+                "hit_max_iter":        trace.get("hit_max_iter"),
+                "answer_preview":      (trace.get("answer_preview") or "")[:200],
+            })
+        except Exception:
+            continue
+
+    return records

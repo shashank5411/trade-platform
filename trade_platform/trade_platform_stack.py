@@ -317,6 +317,8 @@ class TradePlatformStack(Stack):
                     "glue:GetTable",
                     "glue:GetDatabase",
                     "glue:GetPartitions",
+                    "glue:GetJobRuns",    # ← add this
+                    "glue:GetCrawler",    # ← add this
                 ],
                 resources=["*"],
                 ),
