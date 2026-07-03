@@ -1,0 +1,283 @@
+"""
+query/admin.py — Data layer for the admin dashboard API.
+
+Called by /admin/api/* routes in server.py. All functions are synchronous
+(run_in_threadpool wraps them at the route level). No Athena queries here —
+fast AWS metadata calls only.
+"""
+
+import os
+import json
+import glob
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+
+import boto3
+from boto3.dynamodb.conditions import Key
+
+# ── Config ─────────────────────────────────────────────────────────────────
+
+REGION     = "us-east-2"
+ACCOUNT_ID = "197411402303"
+ENV        = "dev"
+
+TABLE_CONVERSATIONS = f"trade-platform-{ENV}-conversations"
+TABLE_WATERMARKS    = f"trade-platform-{ENV}-watermarks"
+LLMOPS_BUCKET       = f"{ENV}-trade-llmops-{ACCOUNT_ID}"
+EVAL_RESULTS_DIR    = os.path.join(os.path.dirname(__file__), "evaluations", "results")
+
+_glue   = boto3.client("glue",      region_name=REGION)
+_dynamo = boto3.resource("dynamodb", region_name=REGION)
+_s3     = boto3.client("s3",        region_name=REGION)
+
+# ── Source map (job names + crawler only — no Athena/S3 details needed) ───
+
+SOURCES = {
+    "fred":      {"ingest": f"{ENV}-trade-fred-ingestion",      "etl": f"{ENV}-trade-fred-etl",      "crawler": f"{ENV}-trade-fred-processed-crawler",      "watermark": "fred"},
+    "worldbank": {"ingest": f"{ENV}-trade-worldbank-ingestion", "etl": f"{ENV}-trade-worldbank-etl", "crawler": f"{ENV}-trade-worldbank-processed-crawler", "watermark": "worldbank"},
+    "yfinance":  {"ingest": f"{ENV}-trade-yfinance-ingestion",  "etl": f"{ENV}-trade-yfinance-etl",  "crawler": f"{ENV}-trade-yfinance-processed-crawler",  "watermark": "yfinance"},
+    "sec":       {"ingest": f"{ENV}-trade-sec-ingestion",       "etl": f"{ENV}-trade-sec-etl",       "crawler": f"{ENV}-trade-sec-processed-crawler",       "watermark": None},
+    "fedspeak":  {"ingest": f"{ENV}-trade-fedspeak-ingestion",  "etl": f"{ENV}-trade-fedspeak-etl",  "crawler": f"{ENV}-trade-fedspeak-processed-crawler",  "watermark": None},
+    "news":      {"ingest": f"{ENV}-trade-news-ingestion",      "etl": f"{ENV}-trade-news-etl",      "crawler": f"{ENV}-trade-news-processed-crawler",      "watermark": None},
+    "insiders":  {"ingest": f"{ENV}-trade-insiders-ingestion",  "etl": f"{ENV}-trade-insiders-etl",  "crawler": f"{ENV}-trade-insiders-processed-crawler",  "watermark": None},
+    "wikipedia": {"ingest": f"{ENV}-trade-wikipedia-ingestion", "etl": f"{ENV}-trade-wikipedia-etl", "crawler": f"{ENV}-trade-wikipedia-processed-crawler", "watermark": "wikipedia"},
+    "companies": {"ingest": f"{ENV}-trade-yfinance-ingestion",  "etl": f"{ENV}-trade-companies-etl", "crawler": f"{ENV}-trade-yfinance-processed-crawler",  "watermark": None},
+}
+
+# ── Low-level helpers ──────────────────────────────────────────────────────
+
+def _fmt_dt(dt) -> str | None:
+    if dt is None:
+        return None
+    if hasattr(dt, "isoformat"):
+        return dt.astimezone(timezone.utc).isoformat()
+    return str(dt)
+
+
+def _job_status(job_name: str) -> dict:
+    try:
+        runs = _glue.get_job_runs(JobName=job_name, MaxResults=1).get("JobRuns", [])
+        if not runs:
+            return {"state": "NEVER_RUN", "started_on": None, "completed_on": None, "error": None}
+        r = runs[0]
+        return {
+            "state":        r.get("JobRunState"),
+            "started_on":   _fmt_dt(r.get("StartedOn")),
+            "completed_on": _fmt_dt(r.get("CompletedOn")),
+            "error":        (r.get("ErrorMessage") or "")[:200] or None,
+        }
+    except Exception as e:
+        return {"state": "ERROR", "started_on": None, "completed_on": None, "error": str(e)}
+
+
+def _crawler_status(crawler_name: str) -> dict:
+    try:
+        c    = _glue.get_crawler(Name=crawler_name)["Crawler"]
+        last = c.get("LastCrawl", {})
+        return {
+            "state":       c.get("State"),
+            "last_status": last.get("Status"),
+            "last_run":    _fmt_dt(last.get("StartTime")),
+        }
+    except Exception as e:
+        return {"state": "ERROR", "last_status": None, "last_run": None, "error": str(e)}
+
+
+def _watermark_latest(source: str | None) -> str | None:
+    """Most recent last_ingested_period across all watermark rows for a source."""
+    if not source:
+        return None
+    try:
+        table = _dynamo.Table(TABLE_WATERMARKS)
+        resp  = table.query(KeyConditionExpression=Key("source_name").eq(source))
+        dates = [
+            i.get("last_ingested_period")
+            for i in resp.get("Items", [])
+            if i.get("last_ingested_period")
+        ]
+        return max(dates) if dates else None
+    except Exception:
+        return None
+
+
+def _source_status(source_name: str, cfg: dict) -> dict:
+    ingest  = _job_status(cfg["ingest"])
+    etl     = _job_status(cfg["etl"])
+    crawler = _crawler_status(cfg["crawler"])
+    wm      = _watermark_latest(cfg.get("watermark"))
+    return {
+        "source":           source_name,
+        "ingest":           ingest,
+        "etl":              etl,
+        "crawler":          crawler,
+        "watermark_latest": wm,
+    }
+
+# ── Public API ─────────────────────────────────────────────────────────────
+
+def get_pipeline_status() -> list:
+    """
+    Returns status for all sources, fetched in parallel.
+    ~9 sources × 3 AWS calls each = 27 calls, ~2-4s with parallelism.
+    """
+    with ThreadPoolExecutor(max_workers=9) as ex:
+        futures = {
+            ex.submit(_source_status, name, cfg): name
+            for name, cfg in SOURCES.items()
+        }
+        results = []
+        for future in list(futures):
+            try:
+                results.append(future.result())
+            except Exception as e:
+                results.append({"source": futures[future], "error": str(e)})
+    return sorted(results, key=lambda x: x["source"])
+
+
+def get_sessions(limit: int = 20) -> list:
+    """
+    Scan the conversations table and return recent sessions sorted by last_active.
+    Groups items by session_id. Fine for dev-scale; add a GSI on timestamp
+    (or a separate sessions table) before this hits production volume.
+    """
+    table    = _dynamo.Table(TABLE_CONVERSATIONS)
+    sessions: dict[str, dict] = {}
+    scan_kwargs: dict = {}
+
+    while True:
+        resp = table.scan(**scan_kwargs)
+        for item in resp.get("Items", []):
+            sid = item.get("session_id")
+            ts  = item.get("timestamp", "")
+            if not sid:
+                continue
+
+            if sid not in sessions:
+                sessions[sid] = {
+                    "session_id":   sid,
+                    "last_active":  None,
+                    "turn_count":   0,
+                    "has_summary":  False,
+                    "context_note": None,
+                }
+
+            s = sessions[sid]
+
+            if ts == "SUMMARY":
+                s["has_summary"] = True
+                # turn_count is stored directly on the SUMMARY item
+                s["turn_count"]  = int(item.get("turn_count", 0))
+                # updated_at is the compression timestamp — best proxy for last_active
+                if item.get("updated_at"):
+                    ua = item["updated_at"]
+                    if s["last_active"] is None or ua > s["last_active"]:
+                        s["last_active"] = ua
+                # Pull CONTEXT_NOTE out of the structured content field
+                for line in (item.get("content") or "").split("\n"):
+                    if line.strip().startswith("CONTEXT_NOTE"):
+                        s["context_note"] = line.split(":", 1)[-1].strip()[:120]
+                        break
+            else:
+                # Raw turn — use its timestamp as a last_active candidate
+                if ts and (s["last_active"] is None or ts > s["last_active"]):
+                    s["last_active"] = ts
+                # Count user messages only so turn_count = number of Q+A pairs
+                if item.get("role") == "user":
+                    s["turn_count"] += 1
+
+        if "LastEvaluatedKey" not in resp:
+            break
+        scan_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+    return sorted(
+        sessions.values(),
+        key=lambda x: x["last_active"] or "",
+        reverse=True,
+    )[:limit]
+
+
+def get_evals() -> dict:
+    """
+    Read run_*/results.json from evaluations/results/ on disk.
+    Returns latest run detail + history (last 10 runs).
+    """
+    if not os.path.isdir(EVAL_RESULTS_DIR):
+        return {"error": f"Results dir not found: {EVAL_RESULTS_DIR}", "runs": []}
+
+    run_files = sorted(
+        glob.glob(os.path.join(EVAL_RESULTS_DIR, "run_*", "results.json")),
+        reverse=True,  # newest first
+    )
+
+    if not run_files:
+        return {"latest": None, "runs": []}
+
+    runs = []
+    for path in run_files[:10]:
+        run_id = os.path.basename(os.path.dirname(path)).replace("run_", "")
+        try:
+            with open(path) as f:
+                data = json.load(f)
+
+            # data may be a list of question records or a dict with a "results" key
+            records = data if isinstance(data, list) else data.get("results", [])
+            total   = len(records)
+            passed  = sum(1 for r in records if r.get("passed") or r.get("score") == 1)
+
+            by_category: dict[str, dict] = {}
+            for r in records:
+                cat = r.get("category", "unknown")
+                if cat not in by_category:
+                    by_category[cat] = {"passed": 0, "total": 0}
+                by_category[cat]["total"] += 1
+                if r.get("passed") or r.get("score") == 1:
+                    by_category[cat]["passed"] += 1
+
+            runs.append({
+                "run_id":      run_id,
+                "total":       total,
+                "passed":      passed,
+                "pass_rate":   round(passed / total, 3) if total else 0,
+                "by_category": by_category,
+            })
+        except Exception as e:
+            runs.append({"run_id": run_id, "error": str(e)})
+
+    return {"latest": runs[0] if runs else None, "runs": runs}
+
+
+def get_telemetry(limit: int = 50) -> list:
+    """
+    List and lightly parse recent trace files from the LLMOps S3 bucket.
+    Prefix assumed to be 'traces/' — adjust if telemetry.py uses a different path.
+    """
+    try:
+        paginator   = _s3.get_paginator("list_objects_v2")
+        all_objects = []
+        for page in paginator.paginate(Bucket=LLMOPS_BUCKET, Prefix="traces/"):
+            all_objects.extend(page.get("Contents", []))
+
+        if not all_objects:
+            return []
+
+        recent  = sorted(all_objects, key=lambda o: o["LastModified"], reverse=True)[:limit]
+        records = []
+
+        for obj in recent:
+            try:
+                body  = _s3.get_object(Bucket=LLMOPS_BUCKET, Key=obj["Key"])["Body"].read()
+                trace = json.loads(body)
+                records.append({
+                    "timestamp":      _fmt_dt(obj["LastModified"]),
+                    "question":       (trace.get("question") or "")[:100],
+                    "agents":         trace.get("agents_used") or trace.get("agents") or [],
+                    "total_cost_usd": trace.get("total_cost_usd") or trace.get("cost_usd"),
+                    "latency_s":      trace.get("latency_s") or trace.get("total_latency_s"),
+                    "reflexion_pass": trace.get("reflexion_pass"),
+                })
+            except Exception:
+                continue
+
+        return records
+    except Exception as e:
+        return [{"error": str(e)}]
