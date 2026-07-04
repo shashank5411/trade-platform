@@ -2,145 +2,541 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <title>Trade Platform Agent</title>
 <style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:         #f2f0eb;
+    --surface:    #fdfcfa;
+    --border:     #d8d0c4;
+    --text:       #1e1a14;
+    --muted:      #6b7591;
+    --accent:     #b45309;
+    --accent-bg:  #f5ead8;
+    --user-bg:    #f5ead8;
+    --user-border:#d4b896;
+    --asst-bg:    #ffffff;
+    --asst-border:#dde2ee;
+    --sidebar-w:  260px;
+    --sans:       'Sora', system-ui, sans-serif;
+    --mono:       'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  html, body { height: 100%; }
+
   body {
-    font-family: system-ui, sans-serif;
-    max-width: 700px;
-    margin: 40px auto;
-    padding: 0 20px;
-    color: #222;
-  }
-  h1 {
-    font-size: 1.3em;
-  }
-  textarea {
-    width: 100%;
-    height: 80px;
-    font-size: 1em;
-    font-family: inherit;
-    padding: 8px;
-    box-sizing: border-box;
-  }
-  .button-row {
-    margin-top: 8px;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
     display: flex;
-    gap: 8px;
-    align-items: center;
+    height: 100vh;
+    overflow: hidden;
   }
-  button {
-    padding: 8px 16px;
-    font-size: 1em;
-    cursor: pointer;
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
   }
-  button:disabled {
-    cursor: default;
-    opacity: 0.6;
-  }
-  #new-chat {
-    background: none;
-    border: 1px solid #aaa;
-    color: #555;
-    font-size: 0.9em;
-  }
-  #status {
-    margin-top: 16px;
-    color: #666;
-    font-style: italic;
-  }
-  #answer {
-    margin-top: 16px;
-    white-space: pre-wrap;
-    line-height: 1.4;
-  }
-  #answer.error {
-    color: #b00020;
-    font-style: normal;
-  }
+  .sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .sidebar-logo { font-size: 13px; font-weight: 700; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 12px; text-transform: uppercase; }
+  .btn-new-chat { width: 100%; padding: 8px 12px; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 13px; font-family: var(--sans); cursor: pointer; font-weight: 500; transition: background 0.15s; }
+  .btn-new-chat:hover { background: #92400e; }
+  .sidebar-section-label { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); padding: 12px 16px 6px; flex-shrink: 0; }
+  .session-list { flex: 1; overflow-y: auto; padding: 4px 8px 16px; }
+  .session-item { padding: 9px 10px; border-radius: 6px; cursor: pointer; transition: background 0.1s; margin-bottom: 2px; border: 1px solid transparent; }
+  .session-item:hover { background: var(--accent-bg); }
+  .session-item.active { background: var(--accent-bg); border-color: var(--user-border); }
+  .session-item-note { font-size: 12px; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
+  .session-item-meta { font-size: 11px; color: var(--muted); margin-top: 2px; display: flex; gap: 8px; }
+  .sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); flex-shrink: 0; }
+  .btn-admin { display: block; width: 100%; padding: 7px 12px; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; font-family: var(--sans); color: var(--muted); cursor: pointer; text-align: left; text-decoration: none; transition: border-color 0.15s, color 0.15s; }
+  .btn-admin:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Main ── */
+  .main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--bg); }
+  .main-header { padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; display: flex; align-items: center; }
+  .main-header-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .main-header-sid { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Messages ── */
+  .messages { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { display: flex; flex-direction: column; max-width: 80%; }
+  .msg.user { align-self: flex-end; align-items: flex-end; }
+  .msg.assistant { align-self: flex-start; align-items: flex-start; }
+  .msg-role { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; padding: 0 4px; }
+  .msg-bubble { padding: 12px 16px; border-radius: 10px; line-height: 1.6; font-size: 13.5px; word-break: break-word; }
+  .msg.user .msg-bubble { background: var(--user-bg); border: 1px solid var(--user-border); border-bottom-right-radius: 3px; color: #78350f; white-space: pre-wrap; }
+  .msg.assistant .msg-bubble { background: var(--asst-bg); border: 1px solid var(--asst-border); border-bottom-left-radius: 3px; color: var(--text); }
+  .msg.assistant .msg-bubble.error { color: #991b1b; background: #fee2e2; border-color: #fca5a5; }
+
+  /* ── Empty state ── */
+  .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); gap: 8px; padding: 40px; }
+  .empty-state-text { font-size: 14px; font-weight: 500; }
+  .empty-state-sub  { font-size: 12px; }
+
+  /* ── Typing ── */
+  .typing { display: flex; gap: 4px; padding: 14px 16px; background: var(--asst-bg); border: 1px solid var(--asst-border); border-radius: 10px; border-bottom-left-radius: 3px; width: fit-content; }
+  .typing span { width: 6px; height: 6px; background: var(--muted); border-radius: 50%; animation: bounce 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%,80%,100%{transform:translateY(0);opacity:0.4} 40%{transform:translateY(-5px);opacity:1} }
+
+  /* ── Input ── */
+  .input-area { padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+  .input-row { display: flex; gap: 10px; align-items: flex-end; max-width: 900px; margin: 0 auto; }
+  textarea { flex: 1; padding: 10px 14px; font-size: 13.5px; font-family: var(--sans); border: 1px solid var(--border); border-radius: 8px; resize: none; height: 44px; min-height: 44px; max-height: 160px; line-height: 1.5; color: var(--text); background: var(--bg); transition: border-color 0.15s; overflow-y: hidden; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  .btn-send { padding: 10px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 13.5px; font-family: var(--sans); font-weight: 500; cursor: pointer; height: 44px; flex-shrink: 0; transition: background 0.15s; }
+  .btn-send:hover { background: #92400e; }
+  .btn-send:disabled { opacity: 0.5; cursor: default; }
+  .input-hint { font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px; }
+  .session-loading { font-size: 12px; color: var(--muted); padding: 12px 16px; font-style: italic; }
+
+  /* ── Markdown ── */
+  .msg-bubble * { margin: 0; padding: 0; }
+  .msg-bubble h1,.msg-bubble h2,.msg-bubble h3 { font-size: 14px; font-weight: 700; margin-top: 10px; margin-bottom: 2px; }
+  .msg-bubble h1 { font-size: 15px; }
+  .msg-bubble p { line-height: 1.55; margin-top: 4px; }
+  .msg-bubble p:first-child { margin-top: 0; }
+  .msg-bubble ul,.msg-bubble ol { margin-top: 4px; margin-bottom: 4px; padding-left: 18px; }
+  .msg-bubble li { line-height: 1.55; margin-top: 2px; }
+  .msg-bubble li:first-child { margin-top: 0; }
+  .msg-bubble li > p { margin: 0; }
+  .msg-bubble ul ul,.msg-bubble ol ol,.msg-bubble ul ol,.msg-bubble ol ul { margin-top: 2px; margin-bottom: 0; padding-left: 14px; }
+  .msg-bubble strong { font-weight: 700; }
+  .msg-bubble em { font-style: italic; }
+  .msg-bubble table { border-collapse: collapse; font-size: 12.5px; margin: 8px 0; width: 100%; }
+  .msg-bubble th,.msg-bubble td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  .msg-bubble th { background: var(--bg); font-weight: 600; font-size: 11.5px; }
+  .msg-bubble tr:nth-child(even) td { background: var(--bg); }
+  .msg-bubble code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); }
+  .msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+
+  /* ── Chart ── */
+  .chart-container { margin-top: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; max-width: 100%; opacity: 0; transform: translateY(6px); transition: opacity 0.4s ease, transform 0.4s ease; }
+  .chart-container.visible { opacity: 1; transform: translateY(0); }
+  .chart-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 12px; letter-spacing: 0.02em; }
+  .chart-canvas-wrap { position: relative; height: 240px; }
 </style>
 </head>
 <body>
-  <h1>Trade Platform Agent</h1>
-  <textarea id="question" placeholder="Ask a question..."></textarea>
-  <div class="button-row">
-    <button id="submit">Ask</button>
-    <button id="new-chat" title="Start a new conversation">New Chat</button>
+
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">Trade Platform</div>
+    <button class="btn-new-chat" onclick="newChat()">+ New Chat</button>
   </div>
-  <div id="status"></div>
-  <div id="answer"></div>
+  <div class="sidebar-section-label">Recent Sessions</div>
+  <div class="session-list" id="session-list">
+    <div class="session-loading">Loading…</div>
+  </div>
+  <div class="sidebar-footer">
+    <a href="/admin" target="_blank" class="btn-admin">⚙ Admin Dashboard ↗</a>
+  </div>
+</aside>
+
+<div class="main">
+  <div class="main-header">
+    <div>
+      <div class="main-header-title" id="header-title">New Conversation</div>
+      <div class="main-header-sid" id="header-sid"></div>
+    </div>
+  </div>
+  <div class="messages" id="messages">
+    <div class="empty-state" id="empty-state">
+      <div class="empty-state-text">Ask a question to get started</div>
+      <div class="empty-state-sub">Market data · Macro · Filings · Insider trades · News</div>
+    </div>
+  </div>
+  <div class="input-area">
+    <div class="input-row">
+      <textarea id="question" placeholder="Ask about markets, macro, filings, insider activity…" rows="1"></textarea>
+      <button class="btn-send" id="submit">Send</button>
+    </div>
+    <div class="input-hint">Ctrl+Enter to send</div>
+  </div>
+</div>
 
 <script>
-  function generateSessionId() {
-    try {
-      return crypto.randomUUID();
-    } catch {
-      // Fallback for HTTP (non-HTTPS) contexts where randomUUID is unavailable
-      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        const r = Math.random() * 16 | 0;
-        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-      });
-    }
+// ── Session ID ────────────────────────────────────────────────
+function generateSessionId() {
+  try { return crypto.randomUUID(); }
+  catch { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);}); }
+}
+function getSessionFromUrl() {
+  const m = window.location.pathname.match(/^\/chat\/([\w-]+)$/);
+  return m ? m[1] : null;
+}
+function pushSessionUrl(sid) {
+  const url = `/chat/${sid}`;
+  if (window.location.pathname !== url) history.pushState({ sessionId: sid }, '', url);
+}
+
+let sessionId = getSessionFromUrl() || localStorage.getItem('trade_session_id') || generateSessionId();
+localStorage.setItem('trade_session_id', sessionId);
+
+let _messages = [];
+let _busy = false;
+let _sessionLoading = false;
+
+// ── DOM refs ──────────────────────────────────────────────────
+const messagesEl = document.getElementById('messages');
+const emptyEl    = document.getElementById('empty-state');
+const submitEl   = document.getElementById('submit');
+const questionEl = document.getElementById('question');
+
+// ── Helpers ───────────────────────────────────────────────────
+function updateHeader(note) {
+  document.getElementById('header-title').textContent = note || 'New Conversation';
+  document.getElementById('header-sid').textContent = sessionId.slice(0,8) + '…';
+}
+
+function clearMessages() {
+  Array.from(messagesEl.children).forEach(el => { if (el !== emptyEl) el.remove(); });
+}
+
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function appendBubble(role, content, scroll = true) {
+  const wrap = document.createElement('div');
+  wrap.className = `msg ${role}`;
+  const roleEl = document.createElement('div');
+  roleEl.className = 'msg-role';
+  roleEl.textContent = role === 'user' ? 'You' : 'Agent';
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  if (role === 'assistant') {
+    bubble.innerHTML = marked.parse(content || '');
+  } else {
+    bubble.textContent = content;
   }
+  wrap.appendChild(roleEl);
+  wrap.appendChild(bubble);
+  const typing = messagesEl.querySelector('.typing-wrap');
+  if (typing) messagesEl.insertBefore(wrap, typing);
+  else messagesEl.appendChild(wrap);
+  if (scroll) messagesEl.scrollTop = messagesEl.scrollHeight;
+  return { bubble, wrap };
+}
 
-  // Persist session across page reloads; a "New Chat" resets it.
-  let sessionId = localStorage.getItem('trade_session_id');
-  if (!sessionId) {
-    sessionId = generateSessionId();
-    localStorage.setItem('trade_session_id', sessionId);
-  }
+function showTyping() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg assistant typing-wrap';
+  const roleEl = document.createElement('div');
+  roleEl.className = 'msg-role';
+  roleEl.textContent = 'Agent';
+  const b = document.createElement('div');
+  b.className = 'typing';
+  b.innerHTML = '<span></span><span></span><span></span>';
+  wrap.appendChild(roleEl);
+  wrap.appendChild(b);
+  messagesEl.appendChild(wrap);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return wrap;
+}
 
-  const questionEl = document.getElementById("question");
-  const submitEl   = document.getElementById("submit");
-  const newChatEl  = document.getElementById("new-chat");
-  const statusEl   = document.getElementById("status");
-  const answerEl   = document.getElementById("answer");
+function hideTyping(el) { if (el && el.parentNode) el.parentNode.removeChild(el); }
 
-  async function ask() {
-    const question = questionEl.value.trim();
-    if (!question) return;
+function fmtAge(iso) {
+  if (!iso) return '';
+  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
 
-    submitEl.disabled = true;
-    answerEl.textContent = "";
-    answerEl.classList.remove("error");
-    statusEl.textContent = "Thinking...";
+// ── Textarea auto-resize ──────────────────────────────────────
+questionEl.addEventListener('input', () => {
+  questionEl.style.height = '44px';
+  questionEl.style.height = Math.min(questionEl.scrollHeight, 160) + 'px';
+  questionEl.style.overflowY = questionEl.scrollHeight > 160 ? 'auto' : 'hidden';
+});
 
+// ── Chart ─────────────────────────────────────────────────────
+const CHART_COLORS    = ['#b45309','#2563eb','#059669','#7c3aed','#dc2626','#0891b2','#d97706','#4f46e5'];
+const CHART_BG_COLORS = ['#b45309cc','#2563ebcc','#059669cc','#7c3aedcc','#dc2626cc','#0891b2cc','#d97706cc','#4f46e5cc'];
+const _chartInstances = {};
+
+async function pollChart(chartId, containerEl) {
+  for (let i = 0; i < 12; i++) {
+    await new Promise(r => setTimeout(r, 1500));
     try {
-      const res = await fetch("/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, session_id: sessionId }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}`);
-      }
-
+      const res  = await fetch(`/chart/${chartId}`);
       const data = await res.json();
-      statusEl.textContent = "";
-      answerEl.textContent = data.answer;
-    } catch (err) {
-      statusEl.textContent = "";
-      answerEl.classList.add("error");
-      answerEl.textContent = "Something went wrong — try again.";
-    } finally {
-      submitEl.disabled = false;
+      if (data.ready) {
+        if (data.chart) renderChart(data.chart, containerEl);
+        else containerEl.remove();
+        return;
+      }
+    } catch(e) { break; }
+  }
+  containerEl.remove();
+}
+
+function renderChart(spec, containerEl) {
+  const type     = spec.type;
+  const datasets = spec.datasets || [];
+  const baseOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'top', labels: { font: { family: 'Sora, system-ui', size: 11 }, padding: 12 } },
+      tooltip: { bodyFont: { family: 'Sora, system-ui' }, titleFont: { family: 'Sora, system-ui' } },
+    },
+    scales: {},
+  };
+  let chartType = 'line', chartData = {}, chartOpts = {};
+
+  if (type === 'line' || type === 'multiline') {
+    chartType = 'line';
+    chartData = {
+      labels: datasets[0]?.labels || [],
+      datasets: datasets.map((ds, i) => ({
+        label: ds.label, data: ds.data,
+        borderColor: CHART_COLORS[i % CHART_COLORS.length],
+        backgroundColor: CHART_COLORS[i % CHART_COLORS.length] + '22',
+        borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false,
+      })),
+    };
+    chartOpts = { ...baseOpts, scales: {
+      x: { ticks: { font: { size: 10 }, maxRotation: 45 }, grid: { color: '#d8d0c420' } },
+      y: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' },
+           title: { display: !!spec.y_label, text: spec.y_label || '', font: { size: 11 } } },
+    }};
+
+  } else if (type === 'bar') {
+    chartType = 'bar';
+    chartData = {
+      labels: datasets[0]?.labels || [],
+      datasets: datasets.map((ds, i) => ({
+        label: ds.label, data: ds.data,
+        backgroundColor: CHART_BG_COLORS[i % CHART_BG_COLORS.length],
+        borderColor: CHART_COLORS[i % CHART_COLORS.length],
+        borderWidth: 1, borderRadius: 4,
+      })),
+    };
+    chartOpts = { ...baseOpts, scales: {
+      x: { ticks: { font: { size: 10 } }, grid: { display: false } },
+      y: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' } },
+    }};
+
+  } else if (type === 'horizontal_bar') {
+    chartType = 'bar';
+    const ds = datasets[0];
+    chartData = {
+      labels: ds.labels || [],
+      datasets: [{ label: ds.label || 'Value', data: ds.data,
+        backgroundColor: ds.data.map((_,i) => CHART_BG_COLORS[i % CHART_BG_COLORS.length]),
+        borderColor: ds.data.map((_,i) => CHART_COLORS[i % CHART_COLORS.length]),
+        borderWidth: 1, borderRadius: 4,
+      }],
+    };
+    chartOpts = { ...baseOpts, indexAxis: 'y', scales: {
+      x: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' } },
+      y: { ticks: { font: { size: 10 } }, grid: { display: false } },
+    }};
+
+  } else if (type === 'pie') {
+    chartType = 'doughnut';
+    const ds = datasets[0];
+    chartData = {
+      labels: ds.labels || [],
+      datasets: [{ data: ds.data,
+        backgroundColor: ds.data.map((_,i) => CHART_BG_COLORS[i % CHART_BG_COLORS.length]),
+        borderColor: ds.data.map((_,i) => CHART_COLORS[i % CHART_COLORS.length]),
+        borderWidth: 2,
+      }],
+    };
+    chartOpts = { ...baseOpts, scales: {} };
+  }
+
+  containerEl.innerHTML = `
+    <div class="chart-title">${escHtml(spec.title || '')}</div>
+    <div class="chart-canvas-wrap"><canvas id="c-${Date.now()}"></canvas></div>`;
+  const canvas = containerEl.querySelector('canvas');
+  if (!canvas) return;
+  if (_chartInstances[canvas.id]) _chartInstances[canvas.id].destroy();
+  _chartInstances[canvas.id] = new Chart(canvas, { type: chartType, data: chartData, options: chartOpts });
+  requestAnimationFrame(() => requestAnimationFrame(() => containerEl.classList.add('visible')));
+}
+
+// ── Ask ───────────────────────────────────────────────────────
+async function ask() {
+  const question = questionEl.value.trim();
+  if (!question || _busy) return;
+  _busy = true;
+  submitEl.disabled = true;
+  questionEl.value = '';
+  questionEl.style.height = '44px';
+  pushSessionUrl(sessionId);
+  if (emptyEl) emptyEl.style.display = 'none';
+  _messages.push({ role: 'user', content: question });
+  appendBubble('user', question);
+  const typingEl = showTyping();
+  try {
+    const res = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, session_id: sessionId }),
+    });
+    hideTyping(typingEl);
+    if (!res.ok) throw new Error(`${res.status}`);
+    const data = await res.json();
+    _messages.push({ role: 'assistant', content: data.answer });
+    const { wrap } = appendBubble('assistant', data.answer);
+    if (data.chart_id && wrap) {
+      const chartEl = document.createElement('div');
+      chartEl.className = 'chart-container';
+      wrap.appendChild(chartEl);
+      pollChart(data.chart_id, chartEl);
     }
+    loadSessions();
+  } catch(err) {
+    hideTyping(typingEl);
+    const { bubble } = appendBubble('assistant', 'Something went wrong — try again.');
+    bubble.classList.add('error');
+  } finally {
+    _busy = false;
+    submitEl.disabled = false;
+    questionEl.focus();
   }
+}
 
-  function newChat() {
-    sessionId = generateSessionId();
-    localStorage.setItem('trade_session_id', sessionId);
-    questionEl.value = "";
-    answerEl.textContent = "";
-    answerEl.classList.remove("error");
-    statusEl.textContent = "";
+// ── New chat ──────────────────────────────────────────────────
+function newChat() {
+  sessionId = generateSessionId();
+  localStorage.setItem('trade_session_id', sessionId);
+  pushSessionUrl(sessionId);
+  _messages = [];
+  clearMessages();
+  if (emptyEl) emptyEl.style.display = '';
+  updateHeader(null);
+  highlightActiveSession();
+  questionEl.focus();
+}
+
+// ── Load session ──────────────────────────────────────────────
+async function loadSession(sid, note) {
+  if (_sessionLoading) return;
+  _sessionLoading = true;
+  sessionId = sid;
+  localStorage.setItem('trade_session_id', sid);
+  pushSessionUrl(sid);
+  _messages = [];
+  updateHeader(note);
+  highlightActiveSession();
+  clearMessages();
+  if (emptyEl) emptyEl.style.display = 'none';
+  const loadEl = document.createElement('div');
+  loadEl.className = 'session-loading';
+  loadEl.style.padding = '24px';
+  loadEl.textContent = 'Loading conversation…';
+  messagesEl.appendChild(loadEl);
+  try {
+    const data = await fetch(`/admin/api/sessions/${sid}`).then(r => r.json());
+    loadEl.remove();
+    if (data.summary && data.summary.content) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'background:#f5f0e8;border:1px solid #d8d0c4;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:12px;color:#6b7591;line-height:1.5;';
+      const tc = data.summary.turn_count || 0;
+      const cn = data.summary.content.split('\n').find(l => l.startsWith('CONTEXT_NOTE')) || '';
+      banner.innerHTML = `<strong style="color:#1e1a14">📋 Memory context</strong> <span style="font-size:11px">(${tc} earlier turns compressed)</span><br><span>${escHtml(cn)}</span>`;
+      messagesEl.appendChild(banner);
+    }
+    if (data.turns && data.turns.length) {
+      data.turns.forEach(t => { _messages.push({role:t.role,content:t.content}); appendBubble(t.role,t.content,false); });
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    } else if (data.summary) {
+      const s = document.createElement('div');
+      s.style.cssText = 'padding:16px;font-size:13px;line-height:1.7;color:#1e1a14;';
+      s.innerHTML = '<div style="font-size:11px;color:#6b7591;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:12px">Session Summary (all turns compressed)</div>'
+        + '<div style="white-space:pre-wrap">' + escHtml(data.summary.content || '') + '</div>';
+      messagesEl.appendChild(s);
+    } else {
+      if (emptyEl) emptyEl.style.display = '';
+    }
+  } catch(e) {
+    loadEl.remove();
+    const e2 = document.createElement('div');
+    e2.className = 'session-loading';
+    e2.style.padding = '24px';
+    e2.textContent = 'Failed to load conversation.';
+    messagesEl.appendChild(e2);
+  } finally {
+    _sessionLoading = false;
   }
+}
 
-  submitEl.addEventListener("click", ask);
-  newChatEl.addEventListener("click", newChat);
-  questionEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask();
-  });
+// ── Sidebar ───────────────────────────────────────────────────
+function highlightActiveSession() {
+  document.querySelectorAll('.session-item').forEach(el => el.classList.toggle('active', el.dataset.sid === sessionId));
+}
+
+async function loadSessions() {
+  const listEl = document.getElementById('session-list');
+  try {
+    const sessions = await fetch('/admin/api/sessions?limit=30').then(r => r.json());
+    if (!sessions.length) { listEl.innerHTML = '<div class="session-loading">No sessions yet.</div>'; return; }
+    listEl.innerHTML = sessions.map(s => {
+      const note  = s.context_note || 'Session ' + s.session_id.slice(0,8);
+      const short = note.length > 55 ? note.slice(0,55) + '…' : note;
+      return `<div class="session-item" data-sid="${s.session_id}">
+        <div class="session-item-note">${escHtml(short)}</div>
+        <div class="session-item-meta"><span>${s.turn_count} turns</span><span>${fmtAge(s.last_active)}</span></div>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll('.session-item').forEach((el, i) => {
+      el._sessionNote = sessions[i].context_note || ('Session ' + sessions[i].session_id.slice(0,8));
+      el.addEventListener('click', () => loadSession(sessions[i].session_id, el._sessionNote));
+    });
+    highlightActiveSession();
+  } catch(e) {
+    listEl.innerHTML = '<div class="session-loading">Could not load sessions.</div>';
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────
+updateHeader(null);
+
+if (localStorage.getItem('trade_session_id')) {
+  fetch(`/admin/api/sessions/${sessionId}`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.turns && data.turns.length) {
+        if (emptyEl) emptyEl.style.display = 'none';
+        data.turns.forEach(t => { _messages.push({role:t.role,content:t.content}); appendBubble(t.role,t.content,false); });
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    })
+    .catch(() => {})
+    .finally(() => loadSessions());
+} else {
+  loadSessions();
+}
+
+questionEl.focus();
+
+window.addEventListener('popstate', e => {
+  const sid = (e.state && e.state.sessionId) || getSessionFromUrl();
+  if (sid && sid !== sessionId) loadSession(sid, null);
+  else if (!sid) newChat();
+});
+
+submitEl.addEventListener('click', ask);
+questionEl.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) ask(); });
 </script>
 </body>
 </html>

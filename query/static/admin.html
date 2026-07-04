@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trade Platform — Admin</title>
+<style>
+  /* ── Tokens ─────────────────────────────────────────────── */
+  :root {
+    --bg:        #f2f0eb;
+    --surface:   #fdfcfa;
+    --border:    #d8d0c4;
+    --border-hi: #c4b8a8;
+    --text:      #1e1a14;
+    --muted:     #6b7591;
+    --accent:    #b45309;
+    --ok:        #059669;
+    --warn:      #d97706;
+    --err:       #dc2626;
+    --mono:      'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --sans:      'Sora', 'Sora', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    height: 48px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .divider-v {
+    width: 1px;
+    height: 18px;
+    background: var(--border-hi);
+  }
+
+  .env-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fcd34d;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .refresh-info {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .btn-refresh {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border-hi);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .btn-refresh:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Tabs ───────────────────────────────────────────────── */
+  .tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .tab {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 12px 18px;
+    cursor: pointer;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── Main ───────────────────────────────────────────────── */
+  main { padding: 24px; max-width: 1400px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── Section heading ────────────────────────────────────── */
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .section-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .section-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--border-hi);
+  }
+
+  /* ── Table ──────────────────────────────────────────────── */
+  .tbl-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  thead th {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9aa3b8;
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    background: var(--surface);
+  }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+  }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: #f0f4ff; }
+
+  td {
+    padding: 9px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #1c2333;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+
+  td.wrap { white-space: normal; max-width: 320px; word-break: break-word; }
+  td.dim  { color: var(--muted); }
+
+  /* ── Status badges ──────────────────────────────────────── */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge::before { content: ''; width: 5px; height: 5px; border-radius: 50%; }
+
+  .badge-ok   { background: #d1fae5; color: #065f46;     border: 1px solid #6ee7b7; }
+  .badge-ok::before   { background: var(--ok); }
+  .badge-warn { background: #fef3c7; color: #92400e;     border: 1px solid #fcd34d; }
+  .badge-warn::before { background: var(--warn); }
+  .badge-err  { background: #fee2e2; color: #991b1b;     border: 1px solid #fca5a5; }
+  .badge-err::before  { background: var(--err); }
+  .badge-muted { background: #f1f3f8; color: var(--muted); border: 1px solid var(--border); }
+  .badge-muted::before { background: var(--muted); }
+
+  /* ── Stat cards (evals) ─────────────────────────────────── */
+  .cards {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 20px;
+    min-width: 140px;
+  }
+
+  .card-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .card-value {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text);
+  }
+
+  .card-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* ── Loading / empty ────────────────────────────────────── */
+  .state-msg {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    padding: 32px 14px;
+    text-align: center;
+  }
+
+  /* ── Session expand ─────────────────────────────────────── */
+  tr.expandable { cursor: pointer; }
+  tr.detail-row td {
+    background: #f4f6fb;
+    color: var(--muted);
+    font-size: 11px;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  /* ── Responsive spacer ──────────────────────────────────── */
+  .spacer { height: 24px; }
+
+  /* ── Session detail modal ───────────────────────────────── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(30,40,70,0.45);
+    z-index: 100;
+    backdrop-filter: blur(2px);
+  }
+  .modal-overlay.open { display: flex; align-items: flex-start; justify-content: center; padding: 40px 20px; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border-hi);
+    border-radius: 8px;
+    width: 100%;
+    max-width: 860px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .modal-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .modal-sid {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    margin-top: 3px;
+  }
+
+  .modal-close {
+    background: none;
+    border: 1px solid var(--border-hi);
+    color: var(--muted);
+    font-size: 16px;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .modal-close:hover { color: var(--text); border-color: var(--text); }
+
+  .modal-body {
+    overflow-y: auto;
+    padding: 20px;
+    flex: 1;
+  }
+
+  .detail-section {
+    margin-bottom: 24px;
+  }
+
+  .detail-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .summary-content {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap;
+    background: #f8f9fc;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px;
+  }
+
+  .turn {
+    margin-bottom: 16px;
+  }
+
+  .turn-role {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .turn-role.user     { color: var(--accent); }
+  .turn-role.assistant { color: var(--ok); }
+
+  .turn-ts {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .turn-content {
+    font-family: var(--sans);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text);
+    background: #f8f9fc;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .turn-content.user { border-left: 2px solid var(--accent); }
+  .turn-content.assistant { border-left: 2px solid var(--ok); }
+
+
+  /* ── Sortable columns ───────────────────────────────────── */
+  th.sortable {
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s;
+  }
+  th.sortable:hover { color: var(--text); }
+  th.sortable.asc::after  { content: ' ↑'; color: var(--accent); }
+  th.sortable.desc::after { content: ' ↓'; color: var(--accent); }
+
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <span class="logo">Admin Console</span>
+    <div class="divider-v"></div>
+    <span class="env-badge">dev</span>
+  </div>
+  <div class="header-right">
+    <span class="refresh-info" id="last-refreshed">—</span>
+    <button class="btn-refresh" onclick="refreshAll()">↺ Refresh</button>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" data-tab="pipeline">Pipeline</div>
+  <div class="tab" data-tab="sessions">Sessions</div>
+  <div class="tab" data-tab="telemetry">Telemetry</div>
+  <div class="tab" data-tab="evals">Evals</div>
+</div>
+
+<main>
+
+  <!-- ── Pipeline ─────────────────────────────────────────── -->
+  <div class="panel active" id="panel-pipeline">
+    <div class="section-head">
+      <span class="section-title">Pipeline Status</span>
+      <span class="section-count" id="pipeline-count"></span>
+    </div>
+    <div class="tbl-wrap">
+      <table id="pipeline-table">
+        <thead>
+          <tr>
+            <th class="sortable" onclick="sortTable('pipeline-table',0)">Source</th>
+            <th class="sortable" onclick="sortTable('pipeline-table',1)">Ingest</th>
+            <th class="sortable" onclick="sortTable('pipeline-table',2)">Ingest Completed</th>
+            <th class="sortable" onclick="sortTable('pipeline-table',3)">ETL</th>
+            <th class="sortable" onclick="sortTable('pipeline-table',4)">ETL Completed</th>
+            <th class="sortable" onclick="sortTable('pipeline-table',5)">Crawler</th>
+            <th class="sortable" onclick="sortTable('pipeline-table',6)">Crawler Last Run</th>
+            <th class="sortable" onclick="sortTable('pipeline-table',7)">Watermark</th>
+          </tr>
+        </thead>
+        <tbody id="pipeline-body">
+          <tr><td colspan="8" class="state-msg">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Sessions ─────────────────────────────────────────── -->
+  <div class="panel" id="panel-sessions">
+    <div class="section-head">
+      <span class="section-title">Recent Sessions</span>
+      <span class="section-count" id="sessions-count"></span>
+    </div>
+    <div class="tbl-wrap">
+      <table id="sessions-table">
+        <thead>
+          <tr>
+            <th class="sortable" onclick="sortTable('sessions-table',0)">Session ID</th>
+            <th class="sortable" onclick="sortTable('sessions-table',1)">Last Active</th>
+            <th class="sortable" onclick="sortTable('sessions-table',2,'num')">Turns</th>
+            <th class="sortable" onclick="sortTable('sessions-table',3)">Summary</th>
+            <th>Context Note</th>
+          </tr>
+        </thead>
+        <tbody id="sessions-body">
+          <tr><td colspan="5" class="state-msg">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Telemetry ─────────────────────────────────────────── -->
+  <div class="panel" id="panel-telemetry">
+    <div class="section-head" style="justify-content:space-between">
+      <div style="display:flex;align-items:baseline;gap:10px">
+        <span class="section-title">Recent Agent Traces</span>
+        <span class="section-count" id="telemetry-count"></span>
+      </div>
+      <div id="telemetry-filter-bar" style="display:none;align-items:center;gap:8px">
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">Session:</span>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--accent)" id="active-filter-sid"></span>
+        <button class="btn-refresh" onclick="clearSidFilter()" style="font-size:10px;padding:2px 8px">✕ Clear</button>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table id="telemetry-table">
+        <thead>
+          <tr>
+            <th class="sortable" onclick="sortTable('telemetry-table',0)">Time</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',1)">Session</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',2)">Agent</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',3)">Node</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',4,'num')">Iter</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',5,'num')">Tokens (in/out)</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',6,'num')">Latency</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',7)">Reflexion</th>
+            <th class="sortable" onclick="sortTable('telemetry-table',8)">Max Iter</th>
+            <th>Question</th>
+          </tr>
+        </thead>
+        <tbody id="telemetry-body">
+          <tr><td colspan="10" class="state-msg">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Evals ─────────────────────────────────────────────── -->
+  <div class="panel" id="panel-evals">
+    <div id="evals-cards" class="cards"></div>
+    <div class="section-head">
+      <span class="section-title">Run History</span>
+      <span class="section-count" id="evals-count"></span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Run ID</th>
+            <th>Pass Rate</th>
+            <th>Passed</th>
+            <th>Total</th>
+            <th>Routing</th>
+            <th>Tool Selection</th>
+            <th>Grounding</th>
+            <th>Other</th>
+          </tr>
+        </thead>
+        <tbody id="evals-body">
+          <tr><td colspan="8" class="state-msg">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── Utilities ────────────────────────────────────────────────
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('en-US', {
+    month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  });
+}
+
+function fmtAge(iso) {
+  if (!iso) return '—';
+  const secs = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (secs < 60)   return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+  if (secs < 86400)return `${Math.floor(secs/3600)}h ago`;
+  return `${Math.floor(secs/86400)}d ago`;
+}
+
+function badge(state) {
+  if (!state) return '<span class="badge badge-muted">—</span>';
+  const s = state.toUpperCase();
+  if (s === 'SUCCEEDED' || s === 'READY')
+    return `<span class="badge badge-ok">${s}</span>`;
+  if (s === 'RUNNING' || s === 'STARTING' || s === 'NEVER_RUN')
+    return `<span class="badge badge-warn">${s}</span>`;
+  return `<span class="badge badge-err">${s}</span>`;
+}
+
+function passRateColor(rate) {
+  if (rate >= 0.9) return 'var(--ok)';
+  if (rate >= 0.7) return 'var(--warn)';
+  return 'var(--err)';
+}
+
+function catStr(by_cat, key) {
+  const c = by_cat && by_cat[key];
+  if (!c) return '<td class="dim">—</td>';
+  const pct = c.total ? Math.round(c.passed/c.total*100) : 0;
+  return `<td>${c.passed}/${c.total} <span class="dim">(${pct}%)</span></td>`;
+}
+
+// ── Tab switching ────────────────────────────────────────────
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Pipeline ─────────────────────────────────────────────────
+
+async function loadPipeline() {
+  const body = document.getElementById('pipeline-body');
+  try {
+    const data = await fetch('/admin/api/pipeline').then(r => r.json());
+    document.getElementById('pipeline-count').textContent = `${data.length} sources`;
+    body.innerHTML = data.map(s => {
+      const ingestCompleted = s.ingest?.completed_on;
+      const etlCompleted    = s.etl?.completed_on;
+      const crawlerRun      = s.crawler?.last_run;
+      return `<tr>
+        <td><strong>${s.source}</strong></td>
+        <td>${badge(s.ingest?.state)}</td>
+        <td class="dim">${fmtTime(ingestCompleted)} <span style="color:var(--muted);font-size:10px">${fmtAge(ingestCompleted)}</span></td>
+        <td>${badge(s.etl?.state)}</td>
+        <td class="dim">${fmtTime(etlCompleted)} <span style="color:var(--muted);font-size:10px">${fmtAge(etlCompleted)}</span></td>
+        <td>${badge(s.crawler?.last_status || s.crawler?.state)}</td>
+        <td class="dim">${fmtTime(crawlerRun)} <span style="color:var(--muted);font-size:10px">${fmtAge(crawlerRun)}</span></td>
+        <td class="dim">${s.watermark_latest || '—'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="8" class="state-msg" style="color:var(--err)">Error: ${e.message}</td></tr>`;
+  }
+}
+
+// ── Sessions ─────────────────────────────────────────────────
+
+async function loadSessions() {
+  const body = document.getElementById('sessions-body');
+  try {
+    const data = await fetch('/admin/api/sessions').then(r => r.json());
+    document.getElementById('sessions-count').textContent = `${data.length} sessions`;
+    body.innerHTML = data.map(s => {
+      const shortId = s.session_id.split('-')[0] + '…';
+      const sumBadge = s.has_summary
+        ? '<span class="badge badge-ok">YES</span>'
+        : '<span class="badge badge-muted">NO</span>';
+      return `
+        <tr class="expandable" onclick="openSession('${s.session_id}')">
+          <td><span title="${s.session_id}">${shortId}</span></td>
+          <td class="dim">${fmtTime(s.last_active)} <span style="color:var(--muted);font-size:10px">${fmtAge(s.last_active)}</span></td>
+          <td>${s.turn_count}</td>
+          <td>${sumBadge}</td>
+          <td class="wrap dim">${s.context_note || '—'}</td>
+        </tr>
+`;
+    }).join('');
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="5" class="state-msg" style="color:var(--err)">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function openSession(sessionId) {
+  const overlay = document.getElementById('session-modal');
+  const body    = document.getElementById('modal-body');
+  const sidEl   = document.getElementById('modal-sid');
+  sidEl.textContent = sessionId;
+  body.innerHTML = '<div class="state-msg">Loading…</div>';
+  overlay.classList.add('open');
+
+  try {
+    const data = await fetch('/admin/api/sessions/' + sessionId).then(r => r.json());
+    let html = '';
+
+    // SUMMARY
+    if (data.summary) {
+      html += `<div class="detail-section">
+        <div class="detail-label">Memory Summary (${data.summary.turn_count} turns absorbed · updated ${fmtTime(data.summary.updated_at)})</div>
+        <div class="summary-content">${escHtml(data.summary.content || '')}</div>
+      </div>`;
+    }
+
+    // Turns
+    if (data.turns && data.turns.length) {
+      html += '<div class="detail-section"><div class="detail-label">Conversation Turns</div>';
+      data.turns.forEach(t => {
+        html += `<div class="turn">
+          <div class="turn-role ${t.role}">${t.role} <span class="turn-ts">${fmtTime(t.timestamp)}</span></div>
+          <div class="turn-content ${t.role}">${escHtml(t.content || '')}</div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    if (!html) html = '<div class="state-msg">No content found for this session.</div>';
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = `<div class="state-msg" style="color:var(--err)">Error: ${e.message}</div>`;
+  }
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById('session-modal')) closeModalDirect();
+}
+
+function closeModalDirect() {
+  document.getElementById('session-modal').classList.remove('open');
+}
+
+// Close on Escape
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModalDirect(); });
+
+// ── Telemetry ─────────────────────────────────────────────────
+
+
+let _allTelemetry = [];
+
+async function loadTelemetry() {
+  const body = document.getElementById('telemetry-body');
+  try {
+    const data = await fetch('/admin/api/telemetry').then(r => r.json());
+    _allTelemetry = data;
+    renderTelemetry(data);
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="10" class="state-msg" style="color:var(--err)">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function filterBySid(sid) {
+  const filtered = _allTelemetry.filter(t => t.session_id === sid);
+  renderTelemetry(filtered);
+  document.getElementById('telemetry-filter-bar').style.display = 'flex';
+  document.getElementById('active-filter-sid').textContent = sid.slice(0,8) + '…';
+  document.getElementById('telemetry-count').textContent = `${filtered.length} traces (filtered)`;
+}
+
+function clearSidFilter() {
+  renderTelemetry(_allTelemetry);
+  document.getElementById('telemetry-filter-bar').style.display = 'none';
+}
+
+function renderTelemetry(data) {
+  const body = document.getElementById('telemetry-body');
+  document.getElementById('telemetry-count').textContent = `${data.length} traces`;
+  if (data.length === 0 || data[0]?.error) {
+    body.innerHTML = `<tr><td colspan="10" class="state-msg">${data[0]?.error || 'No traces found'}</td></tr>`;
+    return;
+  }
+  body.innerHTML = data.map(t => {
+      const agentColors = {
+        MarketAgent:    '#4a9eff',
+        MacroAgent:     '#a78bfa',
+        FilingsAgent:   '#f5a623',
+        SentimentAgent: '#2dd4a0',
+        dag_executor:   '#5a6478',
+      };
+      const color = agentColors[t.agent] || 'var(--text)';
+      const refBadge = t.reflexion_triggered
+        ? (t.reflexion_passed ? '<span class="badge badge-ok">PASS</span>' : '<span class="badge badge-err">FAIL</span>')
+        : '<span class="badge badge-muted">—</span>';
+      const maxIter = t.hit_max_iter
+        ? '<span class="badge badge-warn">YES</span>'
+        : '<span class="badge badge-muted">—</span>';
+      const tokens = (t.input_tokens || t.output_tokens)
+        ? `${(t.input_tokens||0).toLocaleString()} / ${(t.output_tokens||0).toLocaleString()}`
+        : '—';
+      // Strip [Session context:...] prefix from question display
+      const q = (t.question || '').replace(/^\[Session context:[^\]]*\]\s*/i, '');
+      const sid = t.session_id && t.session_id !== 'no-session' ? t.session_id : null;
+      const sidShort = sid ? sid.slice(0,8) + '…' : '<span style="color:var(--muted)">—</span>';
+      return `<tr onclick="openTrace('${encodeURIComponent(t.s3_key || '')}')" style="cursor:pointer">
+        <td class="dim">${fmtTime(t.timestamp)}</td>
+        <td style="font-family:var(--mono);font-size:10px">${sid ? `<span onclick="event.stopPropagation();filterBySid('${sid}')" title="${sid}" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:3px">${sidShort}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
+        <td style="color:${color};font-weight:600">${t.agent || '—'}</td>
+        <td class="dim">${t.node_id || '—'}</td>
+        <td style="text-align:center">${t.iterations ?? '—'}</td>
+        <td class="dim">${tokens}</td>
+        <td>${t.latency_s != null ? t.latency_s.toFixed(2) + 's' : '—'}</td>
+        <td>${refBadge}</td>
+        <td>${maxIter}</td>
+        <td class="wrap dim">${q.slice(0, 80)}${q.length > 80 ? '…' : ''}</td>
+      </tr>`;
+    }).join('');
+}
+
+// ── Evals ────────────────────────────────────────────────────
+
+async function loadEvals() {
+  const body  = document.getElementById('evals-body');
+  const cards = document.getElementById('evals-cards');
+  try {
+    const data = await fetch('/admin/api/evals').then(r => r.json());
+    if (data.error) {
+      cards.innerHTML = '';
+      body.innerHTML = `<tr><td colspan="8" class="state-msg" style="color:var(--err)">${data.error}</td></tr>`;
+      return;
+    }
+    const latest = data.latest;
+    if (latest) {
+      const pct = Math.round((latest.pass_rate || 0) * 100);
+      const col = passRateColor(latest.pass_rate || 0);
+      cards.innerHTML = `
+        <div class="card">
+          <div class="card-label">Pass Rate</div>
+          <div class="card-value" style="color:${col}">${pct}%</div>
+          <div class="card-sub">${latest.passed} / ${latest.total} questions</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Latest Run</div>
+          <div class="card-value" style="font-size:15px">${latest.run_id.replace('T', ' ').replace(/-/g, ':').slice(0,16)}</div>
+          <div class="card-sub">${data.runs.length} runs on record</div>
+        </div>
+        ${Object.entries(latest.by_category || {}).map(([cat, v]) => `
+        <div class="card">
+          <div class="card-label">${cat}</div>
+          <div class="card-value" style="color:${passRateColor(v.passed/v.total)}">${Math.round(v.passed/v.total*100)}%</div>
+          <div class="card-sub">${v.passed}/${v.total}</div>
+        </div>`).join('')}`;
+    }
+
+    document.getElementById('evals-count').textContent = `${data.runs.length} runs`;
+    body.innerHTML = (data.runs || []).map(r => {
+      if (r.error) return `<tr><td colspan="8" class="dim">${r.run_id} — ${r.error}</td></tr>`;
+      const pct = Math.round((r.pass_rate || 0) * 100);
+      const col = passRateColor(r.pass_rate || 0);
+      const bc  = r.by_category || {};
+      return `<tr>
+        <td class="dim">${r.run_id}</td>
+        <td style="color:${col};font-weight:700">${pct}%</td>
+        <td>${r.passed}</td>
+        <td>${r.total}</td>
+        ${catStr(bc, 'routing')}
+        ${catStr(bc, 'tool_selection')}
+        ${catStr(bc, 'grounding')}
+        <td class="dim">${Object.entries(bc).filter(([k])=>!['routing','tool_selection','grounding'].includes(k)).map(([k,v])=>`${k}: ${v.passed}/${v.total}`).join(', ') || '—'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="8" class="state-msg" style="color:var(--err)">Error: ${e.message}</td></tr>`;
+  }
+}
+
+// ── Refresh all ──────────────────────────────────────────────
+
+async function refreshAll() {
+  document.getElementById('last-refreshed').textContent = 'Refreshing…';
+  await Promise.all([loadPipeline(), loadSessions(), loadTelemetry(), loadEvals()]);
+  document.getElementById('last-refreshed').textContent =
+    'Updated ' + new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false});
+}
+
+// Auto-refresh every 60s
+refreshAll();
+setInterval(refreshAll, 60000);
+
+
+async function openTrace(encodedKey) {
+  const key     = decodeURIComponent(encodedKey);
+  const overlay = document.getElementById('trace-modal');
+  const body    = document.getElementById('trace-modal-body');
+  const title   = document.getElementById('trace-modal-title');
+  title.textContent = key.split('/').pop();
+  body.innerHTML = '<div class="state-msg">Loading…</div>';
+  overlay.classList.add('open');
+
+  try {
+    const t = await fetch('/admin/api/telemetry/detail?key=' + encodedKey).then(r => r.json());
+    if (t.error) { body.innerHTML = `<div class="state-msg" style="color:var(--err)">${t.error}</div>`; return; }
+
+    const agentColors = {
+      MarketAgent:'#4a9eff', MacroAgent:'#a78bfa',
+      FilingsAgent:'#f5a623', SentimentAgent:'#2dd4a0', dag_executor:'#5a6478'
+    };
+    const col = agentColors[t.agent] || 'var(--text)';
+
+    // Stats bar
+    let html = `<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:20px;padding:14px;background:#f4f6fb;border:1px solid var(--border);border-radius:6px">
+      <div><div class="card-label">Agent</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:${col}">${t.agent || '—'}</div></div>
+      <div><div class="card-label">Node</div><div style="font-family:var(--mono);font-size:13px">${t.node_id || '—'}</div></div>
+      <div><div class="card-label">Session</div><div style="font-family:var(--mono);font-size:11px;color:var(--accent)">${t.session_id || '—'}</div></div>
+      <div><div class="card-label">Iterations</div><div style="font-family:var(--mono);font-size:13px">${t.iterations ?? '—'}</div></div>
+      <div><div class="card-label">Tokens</div><div style="font-family:var(--mono);font-size:13px">${(t.total_tokens||0).toLocaleString()} <span style="color:var(--muted);font-size:10px">(${(t.input_tokens||0).toLocaleString()} in / ${(t.output_tokens||0).toLocaleString()} out)</span></div></div>
+      <div><div class="card-label">Latency</div><div style="font-family:var(--mono);font-size:13px">${t.latency_s != null ? t.latency_s + 's' : '—'}</div></div>
+      <div><div class="card-label">Reflexion</div><div>${t.reflexion_triggered ? (t.reflexion_passed ? '<span class="badge badge-ok">PASS</span>' : '<span class="badge badge-err">FAIL</span>') : '<span class="badge badge-muted">—</span>'}</div></div>
+      <div><div class="card-label">Max Iter</div><div>${t.hit_max_iter ? '<span class="badge badge-warn">YES</span>' : '<span class="badge badge-muted">NO</span>'}</div></div>
+      <div><div class="card-label">Dedup Hits</div><div>${t.had_dedup_hits ? '<span class="badge badge-warn">YES</span>' : '<span class="badge badge-muted">NO</span>'}</div></div>
+    </div>`;
+
+    // Question
+    html += `<div class="detail-section">
+      <div class="detail-label">Question</div>
+      <div class="summary-content">${escHtml(t.question || '')}</div>
+    </div>`;
+
+    // Tools called
+    if (t.tools_called && t.tools_called.length) {
+      html += `<div class="detail-section"><div class="detail-label">Tools Called (${t.tools_called.length})</div>`;
+      t.tools_called.forEach((tool, i) => {
+        const dedupBadge = tool.was_dedup ? '<span class="badge badge-warn" style="margin-left:8px">DEDUP</span>' : '';
+        html += `<div style="margin-bottom:12px;border:1px solid var(--border);border-radius:4px;overflow:hidden">
+          <div style="padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--border);font-family:var(--mono);font-size:11px;display:flex;align-items:center;gap:8px">
+            <span style="color:var(--warn)">${i+1}.</span>
+            <span style="color:var(--text);font-weight:600">${escHtml(tool.name || '')}</span>
+            ${dedupBadge}
+          </div>
+          <div style="padding:10px 12px;background:#f8f9fc">
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px;letter-spacing:0.08em;text-transform:uppercase">Inputs</div>
+            <div style="font-family:var(--mono);font-size:11px;color:var(--text);white-space:pre-wrap;margin-bottom:10px">${escHtml(tool.inputs_preview || '—')}</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px;letter-spacing:0.08em;text-transform:uppercase">Result</div>
+            <div style="font-family:var(--mono);font-size:11px;color:var(--text);white-space:pre-wrap;max-height:200px;overflow-y:auto">${escHtml(tool.result_preview || '—')}</div>
+          </div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    // Answer
+    if (t.answer_preview) {
+      html += `<div class="detail-section">
+        <div class="detail-label">Answer</div>
+        <div class="summary-content">${escHtml(t.answer_preview)}</div>
+      </div>`;
+    }
+
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = `<div class="state-msg" style="color:var(--err)">Error: ${e.message}</div>`;
+  }
+}
+
+function closeTraceModal(e) {
+  if (e.target === document.getElementById('trace-modal')) closeTraceModalDirect();
+}
+function closeTraceModalDirect() {
+  document.getElementById('trace-modal').classList.remove('open');
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeModalDirect(); closeTraceModalDirect(); }
+});
+
+
+// ── Generic table sort ───────────────────────────────────────
+const _sortState = {};
+
+function sortTable(tableId, colIndex, type = 'str') {
+  const key = `${tableId}:${colIndex}`;
+  const dir = _sortState[key] === 'asc' ? 'desc' : 'asc';
+  _sortState[key] = dir;
+
+  // Update header arrows
+  const table = document.getElementById(tableId);
+  table.querySelectorAll('th.sortable').forEach((th, i) => {
+    th.classList.remove('asc', 'desc');
+    if (i === colIndex) th.classList.add(dir);
+  });
+
+  const tbody = table.querySelector('tbody');
+  const rows  = Array.from(tbody.querySelectorAll('tr:not(.detail-row)'));
+
+  rows.sort((a, b) => {
+    const aText = a.cells[colIndex]?.innerText.trim() || '';
+    const bText = b.cells[colIndex]?.innerText.trim() || '';
+    let cmp = 0;
+    if (type === 'num') {
+      const aNum = parseFloat(aText.replace(/[^0-9.-]/g, '')) || 0;
+      const bNum = parseFloat(bText.replace(/[^0-9.-]/g, '')) || 0;
+      cmp = aNum - bNum;
+    } else {
+      cmp = aText.localeCompare(bText);
+    }
+    return dir === 'asc' ? cmp : -cmp;
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+</script>
+
+<!-- ── Session Detail Modal ─────────────────────────────────── -->
+<div class="modal-overlay" id="session-modal" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Session Detail</div>
+        <div class="modal-sid" id="modal-sid">—</div>
+      </div>
+      <button class="modal-close" onclick="closeModalDirect()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <div class="state-msg">Loading…</div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ── Trace Detail Modal ───────────────────────────────────── -->
+<div class="modal-overlay" id="trace-modal" onclick="closeTraceModal(event)">
+  <div class="modal" style="max-width:960px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Trace Detail</div>
+        <div class="modal-sid" id="trace-modal-title">—</div>
+      </div>
+      <button class="modal-close" onclick="closeTraceModalDirect()">✕</button>
+    </div>
+    <div class="modal-body" id="trace-modal-body">
+      <div class="state-msg">Loading…</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -302,8 +302,76 @@ def get_telemetry(limit: int = 25) -> list:
                 "reflexion_passed":    trace.get("reflexion_passed"),
                 "hit_max_iter":        trace.get("hit_max_iter"),
                 "answer_preview":      (trace.get("answer_preview") or "")[:200],
+                "s3_key":              key,
             })
         except Exception:
             continue
 
     return records
+
+
+def get_session_detail(session_id: str) -> dict:
+    """
+    Return full content for a single session: SUMMARY + all raw turns in order.
+    Used by the session detail modal in the admin UI.
+    """
+    table = _dynamo.Table(TABLE_CONVERSATIONS)
+    resp  = table.query(KeyConditionExpression=Key("session_id").eq(session_id))
+    items = resp.get("Items", [])
+
+    summary = None
+    turns   = []
+
+    for item in items:
+        ts = item.get("timestamp", "")
+        if ts == "SUMMARY":
+            summary = {
+                "content":    item.get("content"),
+                "turn_count": int(item.get("turn_count", 0)),
+                "updated_at": item.get("updated_at"),
+            }
+        else:
+            turns.append({
+                "role":      item.get("role"),
+                "content":   item.get("content"),
+                "timestamp": ts,
+            })
+
+    turns.sort(key=lambda x: x.get("timestamp") or "")
+
+    return {
+        "session_id": session_id,
+        "summary":    summary,
+        "turns":      turns,
+    }
+
+
+def get_trace_detail(s3_key: str) -> dict:
+    """
+    Fetch a single full trace from S3 by its key.
+    Returns all fields including tools_called and full answer.
+    """
+    try:
+        body  = _s3.get_object(Bucket=LLMOPS_BUCKET, Key=s3_key)["Body"].read()
+        trace = json.loads(body)
+        return {
+            "trace_id":            trace.get("trace_id"),
+            "session_id":          trace.get("session_id"),
+            "agent":               trace.get("agent"),
+            "node_id":             trace.get("node_id"),
+            "question":            trace.get("question", ""),
+            "iterations":          trace.get("iterations"),
+            "total_tokens":        trace.get("total_tokens"),
+            "input_tokens":        trace.get("input_tokens"),
+            "output_tokens":       trace.get("output_tokens"),
+            "latency_s":           round(trace["latency_ms"] / 1000, 2) if trace.get("latency_ms") else None,
+            "hit_max_iter":        trace.get("hit_max_iter"),
+            "hit_token_budget":    trace.get("hit_token_budget"),
+            "reflexion_triggered": trace.get("reflexion_triggered"),
+            "reflexion_passed":    trace.get("reflexion_passed"),
+            "had_dedup_hits":      trace.get("had_dedup_hits"),
+            "tools_called":        trace.get("tools_called", []),
+            "answer_preview":      trace.get("answer_preview", ""),
+        }
+    except Exception as e:
+        return {"error": str(e)}
