@@ -115,9 +115,12 @@ class TradePlatformStack(Stack):
                         ]
                     ),
                     description=f"[{env_name}] Crawler for {source.upper()} {layer} data",
-                    schedule=glue.CfnCrawler.ScheduleProperty(
-                        schedule_expression="cron(0 2 * * ? *)",
-                    ),
+                    # yfinance processed crawler is event-driven (see YfinanceProcessedCrawlerTrigger)
+                    # — all other crawlers keep the cron schedule
+                    schedule=None if (source == "yfinance" and layer == "processed")
+                        else glue.CfnCrawler.ScheduleProperty(
+                            schedule_expression="cron(0 2 * * ? *)",
+                        ),
                     schema_change_policy=glue.CfnCrawler.SchemaChangePolicyProperty(
                         update_behavior="LOG",
                         delete_behavior="LOG",
@@ -713,6 +716,38 @@ class TradePlatformStack(Stack):
                 ],
             ),
             description=f"[{env_name}] Fire etl_companies after etl_yfinance succeeds",
+        )
+
+        # ── yfinance processed crawler — event-driven after either ETL job ────
+        # Both etl_yfinance and etl_companies write into the same processed bucket,
+        # so either succeeding should trigger a crawl.
+        glue.CfnTrigger(
+            self, "YfinanceProcessedCrawlerTrigger",
+            name=f"{env_name}-trade-yfinance-processed-crawler-trigger",
+            type="CONDITIONAL",
+            start_on_creation=True,
+            actions=[glue.CfnTrigger.ActionProperty(
+                crawler_name=f"{env_name}-trade-yfinance-processed-crawler",
+            )],
+            predicate=glue.CfnTrigger.PredicateProperty(
+                logical="OR",
+                conditions=[
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=f"{env_name}-trade-yfinance-etl",
+                        state="SUCCEEDED",
+                    ),
+                    glue.CfnTrigger.ConditionProperty(
+                        logical_operator="EQUALS",
+                        job_name=f"{env_name}-trade-companies-etl",
+                        state="SUCCEEDED",
+                    ),
+                ],
+            ),
+            description=(
+                f"[{env_name}] Crawl yfinance processed after "
+                f"etl_yfinance or etl_companies succeeds"
+            ),
         )
 
         # ── SEC ETL chain ─────────────────────────────────────────────────────

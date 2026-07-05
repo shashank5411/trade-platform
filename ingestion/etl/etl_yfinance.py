@@ -105,7 +105,9 @@ from utils.transform import (
     to_json_str,
     validate_market_price_row,
 )
+from utils.watermark import get_watermark, update_watermark
 
+SOURCE = "yfinance"
 s3 = boto3.client("s3", region_name="us-east-2")
 
 
@@ -236,17 +238,32 @@ def write_processed(rows: list) -> int:
             f"data.parquet"
         )
 
+        # Merge with existing partition to preserve data across incremental runs.
+        # New rows win on date collisions (keep="last" after concat).
+        try:
+            obj = s3.get_object(Bucket=PROC_BUCKET, Key=key)
+            existing_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+            write_df = group.drop(columns=["year", "_partition_ticker"])
+            write_df = pd.concat([existing_df, write_df], ignore_index=True)
+            write_df = write_df.drop_duplicates(subset=["ticker_symbol", "date"], keep="last")
+            write_df = write_df.sort_values("date").reset_index(drop=True)
+            print(f"  Merging: {len(existing_df)} existing + {len(group)} new → "
+                  f"{len(write_df)} rows after dedup")
+        except s3.exceptions.NoSuchKey:
+            write_df = group.drop(columns=["year", "_partition_ticker"])
+        except Exception as e:
+            print(f"  ERROR: could not read existing partition "
+                  f"s3://{PROC_BUCKET}/{key}: {e}")
+            print(f"  SKIPPING ticker={partition_ticker} year={year} — "
+                  f"refusing blind overwrite to protect existing data")
+            continue
+
         buf = BytesIO()
-        # Drop both partition columns from Parquet — Athena infers them
-        # from the S3 path. 'ticker_symbol' (original value) stays as a
-        # regular data column — it does NOT collide with the 'ticker'
-        # partition column name.
-        write_df = group.drop(columns=["year", "_partition_ticker"])
         write_df.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
         buf.seek(0)
         s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.getvalue())
         total += len(group)
-        print(f"  Wrote {len(group)} rows → s3://{PROC_BUCKET}/{key}")
+        print(f"  Wrote {len(write_df)} rows → s3://{PROC_BUCKET}/{key}")
 
     return total
 
@@ -367,6 +384,14 @@ def main():
 
     run_keys = find_latest_run_chunk_keys()
 
+    # No-op guard: skip if this run's timestamp was already ETL-processed.
+    run_timestamp = _parse_chunk_filename(run_keys[0])[0]
+    sentinel = get_watermark(SOURCE, "_etl_last_processed")
+    if sentinel and sentinel.get("last_ingested_period") == run_timestamp:
+        print(f"  No new ingestion run since {run_timestamp} was already "
+              f"processed — exiting.")
+        return
+
     # Accumulate TRANSFORMED rows only — transform() already filters to
     # the config ticker list and drops invalid rows, so this is meaningfully
     # smaller than holding all chunks' raw records simultaneously. Each
@@ -385,6 +410,11 @@ def main():
         del chunk_records, chunk_rows
 
     total_written = write_processed(all_rows)
+
+    if total_written > 0:
+        update_watermark(SOURCE, "_etl_last_processed", run_timestamp,
+                         "success", total_written)
+        print(f"  Sentinel updated: _etl_last_processed = {run_timestamp}")
 
     print(f"\n{'─'*50}")
     print(f"Done. {total_written} rows written.")
