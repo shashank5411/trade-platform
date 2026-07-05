@@ -425,6 +425,22 @@
   .turn-content.assistant { border-left: 2px solid var(--ok); }
 
 
+  /* ── Fire trigger button ───────────────────────────────── */
+  .btn-fire {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-fire:hover { background: var(--accent); color: #fff; }
+  .btn-fire:disabled { border-color: var(--border); color: var(--muted); cursor: not-allowed; opacity: 0.5; }
+
   /* ── Sortable columns ───────────────────────────────────── */
   th.sortable {
     cursor: pointer;
@@ -478,10 +494,11 @@
             <th class="sortable" onclick="sortTable('pipeline-table',5)">Crawler</th>
             <th class="sortable" onclick="sortTable('pipeline-table',6)">Crawler Last Run</th>
             <th class="sortable" onclick="sortTable('pipeline-table',7)">Watermark</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody id="pipeline-body">
-          <tr><td colspan="8" class="state-msg">Loading…</td></tr>
+          <tr><td colspan="9" class="state-msg">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -643,6 +660,10 @@ async function loadPipeline() {
       const ingestCompleted = s.ingest?.completed_on;
       const etlCompleted    = s.etl?.completed_on;
       const crawlerRun      = s.crawler?.last_run;
+      const canFire = s.source !== 'companies';
+      const fireCell = canFire
+        ? `<td><button class="btn-fire" onclick="firePipeline('${s.source}')">▶ Fire</button></td>`
+        : `<td class="dim">—</td>`;
       return `<tr>
         <td><strong>${s.source}</strong></td>
         <td>${badge(s.ingest?.state)}</td>
@@ -652,10 +673,26 @@ async function loadPipeline() {
         <td>${badge(s.crawler?.last_status || s.crawler?.state)}</td>
         <td class="dim">${fmtTime(crawlerRun)} <span style="color:var(--muted);font-size:10px">${fmtAge(crawlerRun)}</span></td>
         <td class="dim">${s.watermark_latest || '—'}</td>
+        ${fireCell}
       </tr>`;
     }).join('');
   } catch(e) {
-    body.innerHTML = `<tr><td colspan="8" class="state-msg" style="color:var(--err)">Error: ${e.message}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="state-msg" style="color:var(--err)">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function firePipeline(source) {
+  if (!confirm(`Fire ${source} pipeline?\n\nThis will start the ON_DEMAND manual trigger and cascade through ingestion → ETL → crawler automatically.`)) return;
+  try {
+    const resp = await fetch(`/admin/api/pipeline/${source}/fire`, { method: 'POST' });
+    const data = await resp.json();
+    if (data.ok) {
+      alert(`Fired: ${data.trigger}\n\nThe pipeline chain is now running. Refresh in a few minutes to see updated job states.`);
+    } else {
+      alert(`Error firing ${source}: ${data.error}`);
+    }
+  } catch (e) {
+    alert(`Request failed: ${e.message}`);
   }
 }
 

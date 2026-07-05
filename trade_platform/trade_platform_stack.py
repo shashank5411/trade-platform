@@ -340,6 +340,12 @@ class TradePlatformStack(Stack):
                 ],
                 resources=["*"],
                 ),
+            iam.PolicyStatement(
+                sid="GlueStartTrigger",
+                effect=iam.Effect.ALLOW,
+                actions=["glue:StartTrigger"],
+                resources=[f"arn:aws:glue:{self.region}:{self.account}:trigger/{env_name}-trade-*"],
+            ),
             ]
         )
         ec2_policy.attach_to_role(ec2_role)

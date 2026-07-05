@@ -33,14 +33,14 @@ _s3     = boto3.client("s3",        region_name=REGION)
 # ── Source map (job names + crawler only — no Athena/S3 details needed) ───
 
 SOURCES = {
-    "fred":      {"ingest": f"{ENV}-trade-fred-ingestion",      "etl": f"{ENV}-trade-fred-etl",      "crawler": f"{ENV}-trade-fred-processed-crawler",      "watermark": "fred"},
-    "worldbank": {"ingest": f"{ENV}-trade-worldbank-ingestion", "etl": f"{ENV}-trade-worldbank-etl", "crawler": f"{ENV}-trade-worldbank-processed-crawler", "watermark": "worldbank"},
-    "yfinance":  {"ingest": f"{ENV}-trade-yfinance-ingestion",  "etl": f"{ENV}-trade-yfinance-etl",  "crawler": f"{ENV}-trade-yfinance-processed-crawler",  "watermark": "yfinance"},
-    "sec":       {"ingest": f"{ENV}-trade-sec-ingestion",       "etl": f"{ENV}-trade-sec-etl",       "crawler": f"{ENV}-trade-sec-processed-crawler",       "watermark": None},
-    "fedspeak":  {"ingest": f"{ENV}-trade-fedspeak-ingestion",  "etl": f"{ENV}-trade-fedspeak-etl",  "crawler": f"{ENV}-trade-fedspeak-processed-crawler",  "watermark": None},
-    "news":      {"ingest": f"{ENV}-trade-news-ingestion",      "etl": f"{ENV}-trade-news-etl",      "crawler": f"{ENV}-trade-news-processed-crawler",      "watermark": None},
-    "insiders":  {"ingest": f"{ENV}-trade-insiders-ingestion",  "etl": f"{ENV}-trade-insiders-etl",  "crawler": f"{ENV}-trade-insiders-processed-crawler",  "watermark": None},
-    "wikipedia": {"ingest": f"{ENV}-trade-wikipedia-ingestion", "etl": f"{ENV}-trade-wikipedia-etl", "crawler": f"{ENV}-trade-wikipedia-processed-crawler", "watermark": "wikipedia"},
+    "fred":      {"ingest": f"{ENV}-trade-fred-ingestion",      "etl": f"{ENV}-trade-fred-etl",      "crawler": f"{ENV}-trade-fred-processed-crawler",      "watermark": "fred",      "manual_trigger": f"{ENV}-trade-fred-manual-trigger"},
+    "worldbank": {"ingest": f"{ENV}-trade-worldbank-ingestion", "etl": f"{ENV}-trade-worldbank-etl", "crawler": f"{ENV}-trade-worldbank-processed-crawler", "watermark": "worldbank", "manual_trigger": f"{ENV}-trade-worldbank-manual-trigger"},
+    "yfinance":  {"ingest": f"{ENV}-trade-yfinance-ingestion",  "etl": f"{ENV}-trade-yfinance-etl",  "crawler": f"{ENV}-trade-yfinance-processed-crawler",  "watermark": "yfinance",  "manual_trigger": f"{ENV}-trade-yfinance-manual-trigger"},
+    "sec":       {"ingest": f"{ENV}-trade-sec-ingestion",       "etl": f"{ENV}-trade-sec-etl",       "crawler": f"{ENV}-trade-sec-processed-crawler",       "watermark": None,        "manual_trigger": f"{ENV}-trade-sec-manual-trigger"},
+    "fedspeak":  {"ingest": f"{ENV}-trade-fedspeak-ingestion",  "etl": f"{ENV}-trade-fedspeak-etl",  "crawler": f"{ENV}-trade-fedspeak-processed-crawler",  "watermark": None,        "manual_trigger": f"{ENV}-trade-fedspeak-manual-trigger"},
+    "news":      {"ingest": f"{ENV}-trade-news-ingestion",      "etl": f"{ENV}-trade-news-etl",      "crawler": f"{ENV}-trade-news-processed-crawler",      "watermark": None,        "manual_trigger": f"{ENV}-trade-news-manual-trigger"},
+    "insiders":  {"ingest": f"{ENV}-trade-insiders-ingestion",  "etl": f"{ENV}-trade-insiders-etl",  "crawler": f"{ENV}-trade-insiders-processed-crawler",  "watermark": None,        "manual_trigger": f"{ENV}-trade-insiders-manual-trigger"},
+    "wikipedia": {"ingest": f"{ENV}-trade-wikipedia-ingestion", "etl": f"{ENV}-trade-wikipedia-etl", "crawler": f"{ENV}-trade-wikipedia-processed-crawler", "watermark": "wikipedia", "manual_trigger": f"{ENV}-trade-wikipedia-manual-trigger"},
     "companies": {"ingest": f"{ENV}-trade-yfinance-ingestion",  "etl": f"{ENV}-trade-companies-etl", "crawler": f"{ENV}-trade-yfinance-processed-crawler",  "watermark": None},
 }
 
@@ -375,3 +375,20 @@ def get_trace_detail(s3_key: str) -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def fire_pipeline(source: str) -> dict:
+    """Fire the ON_DEMAND manual trigger for a source. Self-cascades
+    through the existing CONDITIONAL trigger chain (ingestion -> ETL ->
+    crawler) with no further backend action needed. Returns immediately
+    -- does not wait for the pipeline to complete."""
+    cfg = SOURCES.get(source)
+    if not cfg or not cfg.get("manual_trigger"):
+        return {"ok": False, "error": f"No manual trigger available for '{source}'"}
+    try:
+        _glue.start_trigger(Name=cfg["manual_trigger"])
+        return {"ok": True, "source": source, "trigger": cfg["manual_trigger"]}
+    except _glue.exceptions.ConcurrentRunsExceededException:
+        return {"ok": False, "error": "Trigger already running or a downstream job is mid-run"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

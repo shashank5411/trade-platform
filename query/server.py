@@ -171,3 +171,9 @@ async def admin_session_detail(session_id: str):
 async def admin_trace_detail(key: str):
     data = await run_in_threadpool(admin_module.get_trace_detail, key)
     return JSONResponse(content=data)
+
+
+@app.post("/admin/api/pipeline/{source}/fire")
+async def admin_fire_pipeline(source: str):
+    data = await run_in_threadpool(admin_module.fire_pipeline, source)
+    return JSONResponse(content=data)
