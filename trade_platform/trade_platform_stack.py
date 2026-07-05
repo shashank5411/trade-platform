@@ -730,7 +730,7 @@ class TradePlatformStack(Stack):
                 crawler_name=f"{env_name}-trade-yfinance-processed-crawler",
             )],
             predicate=glue.CfnTrigger.PredicateProperty(
-                logical="OR",
+                logical="ANY",  
                 conditions=[
                     glue.CfnTrigger.ConditionProperty(
                         logical_operator="EQUALS",
