@@ -115,7 +115,29 @@ def write_partition(rows: list, year: int, doc_type: str) -> None:
     if not rows:
         return
 
-    df = pd.DataFrame(rows)
+    key = f"documents/source=FEDSPEAK/year={year}/doc_type={doc_type}/data.parquet"
+
+    # Read existing partition and merge — prevents incremental runs from
+    # discarding previously written rows. Skip (never partial-overwrite)
+    # on any read error other than NoSuchKey.
+    existing_rows = []
+    try:
+        obj = s3.get_object(Bucket=PROC_BUCKET, Key=key)
+        existing_df = pq.read_table(io.BytesIO(obj["Body"].read())).to_pandas()
+        existing_rows = existing_df.to_dict(orient="records")
+        print(f"  Merging with {len(existing_rows)} existing rows at {key}")
+    except s3.exceptions.NoSuchKey:
+        pass
+    except Exception as e:
+        print(f"  ERROR: could not read existing partition "
+              f"s3://{PROC_BUCKET}/{key}: {e}")
+        print(f"  SKIPPING year={year} doc_type={doc_type} — "
+              f"refusing blind overwrite to protect existing data")
+        return
+
+    combined = existing_rows + rows
+    df = pd.DataFrame(combined)
+    df = df.drop_duplicates(subset=["doc_id"], keep="last")
 
     # Ensure all schema fields exist
     for field in SCHEMA:
@@ -133,9 +155,10 @@ def write_partition(rows: list, year: int, doc_type: str) -> None:
     pq.write_table(table, buf, compression="snappy")
     buf.seek(0)
 
-    key = f"documents/source=FEDSPEAK/year={year}/doc_type={doc_type}/data.parquet"
     s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.read())
-    print(f"  Written: s3://{PROC_BUCKET}/{key} ({len(rows)} rows)")
+    print(f"  Written: s3://{PROC_BUCKET}/{key} "
+          f"({len(existing_rows)} existing + {len(rows)} new → "
+          f"{len(df)} rows after dedup)")
 
 # ── Main ETL ──────────────────────────────────────────────────────────────────
 def main():

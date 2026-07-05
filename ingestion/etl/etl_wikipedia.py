@@ -117,14 +117,32 @@ def write_processed(rows: list) -> int:
                f"year={year}/"
                f"data.parquet")
 
+        new_df = group.drop(columns=["year", "source"])
+
+        # Read existing partition and merge — protects against article
+        # fetch failures silently dropping rows on incremental runs.
+        try:
+            obj = s3.get_object(Bucket=PROC_BUCKET, Key=key)
+            existing_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+            write_df = pd.concat([existing_df, new_df], ignore_index=True)
+            write_df = write_df.drop_duplicates(subset=["doc_id"], keep="last")
+            print(f"  Merging: {len(existing_df)} existing + {len(new_df)} new → "
+                  f"{len(write_df)} rows after dedup")
+        except s3.exceptions.NoSuchKey:
+            write_df = new_df
+        except Exception as e:
+            print(f"  ERROR: could not read existing partition "
+                  f"s3://{PROC_BUCKET}/{key}: {e}")
+            print(f"  SKIPPING year={year} — refusing blind overwrite "
+                  f"to protect existing data")
+            continue
+
         buf = BytesIO()
-        group.drop(columns=["year", "source"]).to_parquet(
-            buf, index=False, engine="pyarrow", compression="snappy"
-        )
+        write_df.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
         buf.seek(0)
         s3.put_object(Bucket=PROC_BUCKET, Key=key, Body=buf.getvalue())
         total += len(group)
-        print(f"  Wrote {len(group)} rows → s3://{PROC_BUCKET}/{key}")
+        print(f"  Wrote {len(write_df)} rows → s3://{PROC_BUCKET}/{key}")
 
     return total
 
