@@ -13,6 +13,7 @@ Each specialist has:
   - Token budget, tool deduplication, telemetry, and reflexion
 """
 
+import re
 import datetime
 import os
 import json
@@ -32,6 +33,33 @@ ENV = os.environ.get("ENV", "dev")
 from query.config import get_client
 client = get_client()
 registry = get_registry()
+
+# ── Correction preamble stripper ──────────────────────────────────────────
+# Defensive backstop: removes a leading conversational self-correction
+# preamble that the model may emit when the retry prompt is phrased as
+# feedback ("your previous answer had issues"). Only strips from the very
+# start of the string (anchored with ^) and only once (count=1), so it
+# never touches legitimate answer content mid-string.
+_CORRECTION_PREAMBLE_RE = re.compile(
+    r'^(?:'
+    r"(?:you(?:'re| are)(?: right| correct)\b[^.!?:\n]*[.!?:]?\s*)"
+    r'|(?:i(?:\'m| am) sorry\b[^.!?:\n]*[.!?:]?\s*)'
+    r'|(?:i apologize\b[^.!?:\n]*[.!?:]?\s*)'
+    r'|(?:(?:good|great|fair) catch\b[^.!?:\n]*[.!?:]?\s*)'
+    r'|(?:let me (?:correct|revise|fix|redo|restate)\b[^.!?:\n]*[.!?:]?\s*)'
+    r'|(?:my previous (?:answer|response|attempt|analysis)\b[^.!?:\n]*[.!?:]?\s*)'
+    r'|(?:(?:correcting|revising|fixing) (?:my|the) (?:previous|prior|earlier) (?:answer|response)\b[^.!?:\n]*[.!?:]?\s*)'
+    r')+',
+    re.IGNORECASE,
+)
+
+
+def _strip_correction_preamble(text: str) -> str:
+    stripped = _CORRECTION_PREAMBLE_RE.sub('', text, count=1).lstrip()
+    if stripped != text:
+        print("[correction-preamble-stripped]")
+    return stripped
+
 
 # ── Tool subsets per specialist ────────────────────────────────────────────
 
@@ -450,7 +478,7 @@ def _run_agent(
     token_budget: int  = 50_000,
     max_iter:     int  = 8,
     node_id:      str  = None,
-) -> str:
+) -> tuple:
     """Shared ReAct loop with guardrails, telemetry, and reflexion.
 
     node_id identifies which DAG step triggered this run (e.g. "market_2"
@@ -703,13 +731,15 @@ def _run_agent(
         retry_messages = prior_messages + [{
             "role":    "user",
             "content": (
-                f"Your previous answer had issues: {guidance}\n\n"
-                f"The tool results above contain all retrieved data. "
-                f"Answer the original question using ONLY facts present "
-                f"in those tool results. Do not introduce any numbers, "
-                f"percentages, or quotes that do not appear verbatim in "
-                f"the tool results. If a section was not retrieved, "
-                f"say so explicitly rather than fabricating its content."
+                f"[INTERNAL CORRECTION NOTE — do not reference, acknowledge, "
+                f"or respond to this note in your answer: {guidance}]\n\n"
+                f"Answer the original question directly. Do not apologize, "
+                f"mention a previous answer, or acknowledge any correction — "
+                f"just provide the answer. Use ONLY facts present in the tool "
+                f"results above. Do not introduce any numbers, percentages, or "
+                f"quotes that do not appear verbatim in the tool results. If a "
+                f"section was not retrieved, say so explicitly rather than "
+                f"fabricating its content."
             ),
         }]
         for _ in range(max_iter):
@@ -771,7 +801,8 @@ def _run_agent(
         verbose=verbose,
     )
 
-    import re
+    answer = re.sub(r'\[INTERNAL CORRECTION NOTE.*?\]', '', answer, flags=re.DOTALL)
+    answer = _strip_correction_preamble(answer)
     answer = re.sub(
         r'<scratchpad>.*?</scratchpad>', '', answer, flags=re.DOTALL
     ).strip()
@@ -779,7 +810,7 @@ def _run_agent(
     trace.record_answer(answer)
     trace.flush()
 
-    return answer
+    return answer, trace.tools_called
 
 
 def _wrap_tool_result(raw_result: str) -> str:
@@ -832,7 +863,7 @@ class MarketAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> str:
+            node_id: str = None) -> tuple:
         return _run_agent(question, MARKET_SYSTEM, MARKET_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,
@@ -846,7 +877,7 @@ class MacroAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> str:
+            node_id: str = None) -> tuple:
         return _run_agent(question, MACRO_SYSTEM, MACRO_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,
@@ -860,7 +891,7 @@ class FilingsAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> str:
+            node_id: str = None) -> tuple:
         return _run_agent(question, FILINGS_SYSTEM, FILINGS_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,
@@ -1045,7 +1076,7 @@ class SentimentAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> str:
+            node_id: str = None) -> tuple:
         return _run_agent(question, SENTIMENT_SYSTEM, SENTIMENT_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,

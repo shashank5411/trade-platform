@@ -125,10 +125,37 @@
   .msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
 
   /* ── Chart ── */
-  .chart-container { margin-top: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; max-width: 100%; opacity: 0; transform: translateY(6px); transition: opacity 0.4s ease, transform 0.4s ease; }
+  .chart-group {
+    align-self: flex-start;
+    max-width: 92%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .chart-container {
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    width: min(680px, 100%);
+    height: 420px;
+    min-width: 340px;
+    min-height: 280px;
+    max-width: 100%;
+    max-height: 720px;
+    resize: both;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
   .chart-container.visible { opacity: 1; transform: translateY(0); }
-  .chart-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 12px; letter-spacing: 0.02em; }
-  .chart-canvas-wrap { position: relative; height: 240px; }
+  .chart-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 4px; letter-spacing: 0.02em; flex-shrink: 0; }
+  .chart-subtitle { font-size: 10px; color: var(--muted); margin-bottom: 10px; letter-spacing: 0.02em; flex-shrink: 0; }
+  .chart-canvas-wrap { position: relative; flex: 1; min-height: 0; }
 </style>
 </head>
 <body>
@@ -184,7 +211,8 @@ function pushSessionUrl(sid) {
   if (window.location.pathname !== url) history.pushState({ sessionId: sid }, '', url);
 }
 
-let sessionId = getSessionFromUrl() || localStorage.getItem('trade_session_id') || generateSessionId();
+const _urlSessionId = getSessionFromUrl();
+let sessionId = _urlSessionId || generateSessionId();
 localStorage.setItem('trade_session_id', sessionId);
 
 let _messages = [];
@@ -270,52 +298,113 @@ const CHART_COLORS    = ['#b45309','#2563eb','#059669','#7c3aed','#dc2626','#089
 const CHART_BG_COLORS = ['#b45309cc','#2563ebcc','#059669cc','#7c3aedcc','#dc2626cc','#0891b2cc','#d97706cc','#4f46e5cc'];
 const _chartInstances = {};
 
-async function pollChart(chartId, containerEl) {
+async function pollChart(chartId, wrapEl) {
   for (let i = 0; i < 12; i++) {
     await new Promise(r => setTimeout(r, 1500));
     try {
       const res  = await fetch(`/chart/${chartId}`);
       const data = await res.json();
       if (data.ready) {
-        if (data.chart) renderChart(data.chart, containerEl);
-        else containerEl.remove();
+        if (data.charts && data.charts.length > 0) {
+          data.charts.forEach(spec => {
+            const containerEl = document.createElement('div');
+            containerEl.className = 'chart-container';
+            wrapEl.appendChild(containerEl);
+            renderChart(spec, containerEl);
+          });
+        } else {
+          wrapEl.remove();
+        }
         return;
       }
     } catch(e) { break; }
   }
-  containerEl.remove();
+  wrapEl.remove();
 }
 
 function renderChart(spec, containerEl) {
   const type     = spec.type;
   const datasets = spec.datasets || [];
+  const hasDual  = !!spec.y1_label;
+
+  // Format a numeric value with its unit for tooltip display
+  function fmtVal(v, yAxisID) {
+    const unit      = (hasDual && yAxisID === 'y1') ? (spec.y1_label || '') : (spec.y_label || '');
+    const n         = typeof v === 'number' ? v : parseFloat(v);
+    if (isNaN(n)) return String(v);
+    const formatted = n.toLocaleString('en-US', { maximumFractionDigits: 4 });
+    if (unit === '$') return '$' + formatted;
+    if (unit.includes('%')) return formatted + '%';
+    return formatted + (unit ? ' ' + unit : '');
+  }
+
+  // Tooltip callbacks apply to all chart types
+  const tooltipCallbacks = {
+    label: function(ctx) {
+      const ds   = ctx.dataset;
+      const yid  = ds.yAxisID || 'y';
+      // line/bar use parsed.y; horizontal_bar uses parsed.x; pie uses raw
+      const v    = (ctx.parsed && typeof ctx.parsed.y === 'number') ? ctx.parsed.y
+                 : (ctx.parsed && typeof ctx.parsed.x === 'number') ? ctx.parsed.x
+                 : (typeof ctx.raw === 'number')                    ? ctx.raw : 0;
+      const lbl  = ds.label || ctx.label || '';
+      return lbl + ': ' + fmtVal(v, yid);
+    }
+  };
+
   const baseOpts = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
       legend: { position: 'top', labels: { font: { family: 'Sora, system-ui', size: 11 }, padding: 12 } },
-      tooltip: { bodyFont: { family: 'Sora, system-ui' }, titleFont: { family: 'Sora, system-ui' } },
+      tooltip: {
+        bodyFont: { family: 'Sora, system-ui' },
+        titleFont: { family: 'Sora, system-ui' },
+        callbacks: tooltipCallbacks,
+      },
     },
     scales: {},
   };
+
   let chartType = 'line', chartData = {}, chartOpts = {};
 
   if (type === 'line' || type === 'multiline') {
     chartType = 'line';
     chartData = {
-      labels: datasets[0]?.labels || [],
-      datasets: datasets.map((ds, i) => ({
-        label: ds.label, data: ds.data,
-        borderColor: CHART_COLORS[i % CHART_COLORS.length],
-        backgroundColor: CHART_COLORS[i % CHART_COLORS.length] + '22',
-        borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false,
-      })),
+      labels: spec.labels || [],
+      datasets: datasets.map((ds, i) => {
+        const d = {
+          label:           ds.label,
+          data:            ds.data,
+          borderColor:     CHART_COLORS[i % CHART_COLORS.length],
+          backgroundColor: CHART_COLORS[i % CHART_COLORS.length] + '22',
+          borderWidth: 2, pointRadius: 3, tension: 0.3, fill: false,
+        };
+        if (hasDual) d.yAxisID = ds.yAxisID || 'y';
+        return d;
+      }),
     };
-    chartOpts = { ...baseOpts, scales: {
-      x: { ticks: { font: { size: 10 }, maxRotation: 45 }, grid: { color: '#d8d0c420' } },
-      y: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' },
-           title: { display: !!spec.y_label, text: spec.y_label || '', font: { size: 11 } } },
-    }};
+
+    const scales = {
+      x: {
+        ticks: { autoSkip: true, maxRotation: 45, font: { size: 10 } },
+        grid:  { color: '#d8d0c420' },
+      },
+      y: {
+        ticks: { font: { size: 10 } },
+        grid:  { color: '#d8d0c440' },
+        title: { display: !!(spec.y_label), text: spec.y_label || '', font: { size: 11 } },
+      },
+    };
+    if (hasDual) {
+      scales.y1 = {
+        position: 'right',
+        ticks:    { font: { size: 10 } },
+        grid:     { drawOnChartArea: false },
+        title:    { display: true, text: spec.y1_label, font: { size: 11 } },
+      };
+    }
+    chartOpts = { ...baseOpts, scales };
 
   } else if (type === 'bar') {
     chartType = 'bar';
@@ -324,39 +413,41 @@ function renderChart(spec, containerEl) {
       datasets: datasets.map((ds, i) => ({
         label: ds.label, data: ds.data,
         backgroundColor: CHART_BG_COLORS[i % CHART_BG_COLORS.length],
-        borderColor: CHART_COLORS[i % CHART_COLORS.length],
+        borderColor:     CHART_COLORS[i % CHART_COLORS.length],
         borderWidth: 1, borderRadius: 4,
       })),
     };
     chartOpts = { ...baseOpts, scales: {
       x: { ticks: { font: { size: 10 } }, grid: { display: false } },
-      y: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' } },
+      y: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' },
+           title: { display: !!(spec.y_label), text: spec.y_label || '', font: { size: 11 } } },
     }};
 
   } else if (type === 'horizontal_bar') {
     chartType = 'bar';
-    const ds = datasets[0];
+    const ds  = datasets[0];
     chartData = {
       labels: ds.labels || [],
       datasets: [{ label: ds.label || 'Value', data: ds.data,
-        backgroundColor: ds.data.map((_,i) => CHART_BG_COLORS[i % CHART_BG_COLORS.length]),
-        borderColor: ds.data.map((_,i) => CHART_COLORS[i % CHART_COLORS.length]),
+        backgroundColor: ds.data.map((_, i) => CHART_BG_COLORS[i % CHART_BG_COLORS.length]),
+        borderColor:     ds.data.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
         borderWidth: 1, borderRadius: 4,
       }],
     };
     chartOpts = { ...baseOpts, indexAxis: 'y', scales: {
-      x: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' } },
+      x: { ticks: { font: { size: 10 } }, grid: { color: '#d8d0c440' },
+           title: { display: !!(spec.y_label), text: spec.y_label || '', font: { size: 11 } } },
       y: { ticks: { font: { size: 10 } }, grid: { display: false } },
     }};
 
   } else if (type === 'pie') {
     chartType = 'doughnut';
-    const ds = datasets[0];
+    const ds  = datasets[0];
     chartData = {
       labels: ds.labels || [],
       datasets: [{ data: ds.data,
-        backgroundColor: ds.data.map((_,i) => CHART_BG_COLORS[i % CHART_BG_COLORS.length]),
-        borderColor: ds.data.map((_,i) => CHART_COLORS[i % CHART_COLORS.length]),
+        backgroundColor: ds.data.map((_, i) => CHART_BG_COLORS[i % CHART_BG_COLORS.length]),
+        borderColor:     ds.data.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
         borderWidth: 2,
       }],
     };
@@ -365,6 +456,7 @@ function renderChart(spec, containerEl) {
 
   containerEl.innerHTML = `
     <div class="chart-title">${escHtml(spec.title || '')}</div>
+    ${spec.granularity_note ? `<div class="chart-subtitle">${escHtml(spec.granularity_note)}</div>` : ''}
     <div class="chart-canvas-wrap"><canvas id="c-${Date.now()}"></canvas></div>`;
   const canvas = containerEl.querySelector('canvas');
   if (!canvas) return;
@@ -397,11 +489,12 @@ async function ask() {
     const data = await res.json();
     _messages.push({ role: 'assistant', content: data.answer });
     const { wrap } = appendBubble('assistant', data.answer);
-    if (data.chart_id && wrap) {
-      const chartEl = document.createElement('div');
-      chartEl.className = 'chart-container';
-      wrap.appendChild(chartEl);
-      pollChart(data.chart_id, chartEl);
+    if (data.chart_id) {
+      const chartWrap = document.createElement('div');
+      chartWrap.className = 'chart-group';
+      messagesEl.appendChild(chartWrap);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      pollChart(data.chart_id, chartWrap);
     }
     loadSessions();
   } catch(err) {
@@ -511,7 +604,10 @@ async function loadSessions() {
 // ── Init ──────────────────────────────────────────────────────
 updateHeader(null);
 
-if (localStorage.getItem('trade_session_id')) {
+if (_urlSessionId) {
+  // Landed directly on /chat/<id> — refresh, deep link, or browser
+  // back/forward. This is the ONLY case that restores prior messages;
+  // a bare "/" landing always starts a fresh chat.
   fetch(`/admin/api/sessions/${sessionId}`)
     .then(r => r.json())
     .then(data => {

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from query import admin as admin_module
-from query import chart_extractor
+from query import chart_agent
 from query.orchestrator import run as orchestrate
 import query.memory as memory
 
@@ -29,7 +29,9 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # In-memory chart store — keyed by chart_id UUID
-# { chart_id: { "ready": bool, "chart": spec | None } }
+# { chart_id: { "ready": bool, "charts": list[spec] } }
+# "charts" is always a list (empty list = nothing chartable, same role as the
+# old chart=None convention but avoids the None special-case on the frontend).
 chart_store: dict[str, dict] = {}
 
 
@@ -77,7 +79,7 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
         if request.session_id:
             context = await run_in_threadpool(memory.load_context, request.session_id)
 
-        answer = await run_in_threadpool(
+        answer, node_tool_calls = await run_in_threadpool(
             orchestrate,
             request.question,
             context=context,
@@ -87,9 +89,9 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-    # Generate chart_id upfront — extraction runs async after response is sent
+    # Generate chart_id upfront — chart building runs async after response is sent
     chart_id = str(uuid.uuid4())
-    chart_store[chart_id] = {"ready": False, "chart": None}
+    chart_store[chart_id] = {"ready": False, "charts": []}
 
     # Save turns after response (non-blocking)
     if request.session_id:
@@ -100,9 +102,9 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
             memory.save_turn, request.session_id, "assistant", answer
         )
 
-    # Chart extraction — async, doesn't block response
+    # Chart building — async, doesn't block response
     background_tasks.add_task(
-        _extract_and_store_chart, chart_id, request.question, answer
+        _extract_and_store_chart, chart_id, request.question, answer, node_tool_calls
     )
 
     return AskResponse(answer=answer, chart_id=chart_id)
@@ -110,16 +112,18 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
 
 # ── Chart background task + poll endpoint ─────────────────────────────────────
 
-async def _extract_and_store_chart(chart_id: str, question: str, answer: str):
-    """Run chart extraction in a thread so it doesn't block the event loop."""
+async def _extract_and_store_chart(
+    chart_id: str, question: str, answer: str, node_tool_calls: dict
+):
+    """Run chart building in a thread so it doesn't block the event loop."""
     try:
-        spec = await run_in_threadpool(
-            chart_extractor.extract_chart, question, answer
+        specs = await run_in_threadpool(
+            chart_agent.build_charts, question, answer, node_tool_calls
         )
-        chart_store[chart_id] = {"ready": True, "chart": spec}
+        chart_store[chart_id] = {"ready": True, "charts": specs}
     except Exception as e:
-        print(f"[Server] Chart extraction failed for {chart_id}: {e}")
-        chart_store[chart_id] = {"ready": True, "chart": None}
+        print(f"[Server] Chart building failed for {chart_id}: {e}")
+        chart_store[chart_id] = {"ready": True, "charts": []}
 
 
 @app.get("/chart/{chart_id}")
@@ -131,7 +135,7 @@ async def get_chart(chart_id: str):
     """
     result = chart_store.get(chart_id)
     if result is None:
-        return JSONResponse(content={"ready": False, "chart": None})
+        return JSONResponse(content={"ready": False, "charts": []})
     return JSONResponse(content=result)
 
 

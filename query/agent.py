@@ -55,12 +55,15 @@ def run_question(
               f"from session '{session_id}'")
 
     # Run through orchestrator
-    answer = orchestrate(
+    answer, node_tool_calls = orchestrate(
         question,
         context=context,
         verbose=verbose,
         session_id=session_id,
     )
+    if verbose and node_tool_calls:
+        tool_count = sum(len(v) for v in node_tool_calls.values())
+        print(f"[Charts] {len(node_tool_calls)} node(s), {tool_count} tool call(s) collected")
 
     # Save to memory
     if use_memory and session_id:

@@ -21,6 +21,7 @@ from query.reflexion import (
     critique_synthesis, CAVEAT, _needs_reflexion_despite_length,
     check_injection_provenance, INJECTION_CAVEAT,
 )
+from query.sub_agents import _strip_correction_preamble
 
 ENV = os.environ.get("ENV", "dev")
 
@@ -117,11 +118,11 @@ async def _run_agent_async(
     """
     agent = get_agent(agent_type)
     if not agent:
-        return node_id, f"Agent type '{agent_type}' not found in registry."
+        return node_id, f"Agent type '{agent_type}' not found in registry.", []
 
     try:
-        loop   = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
+        loop = asyncio.get_event_loop()
+        answer, tools_called = await loop.run_in_executor(
             None,
             lambda: agent.run(
                 question,
@@ -131,9 +132,9 @@ async def _run_agent_async(
                 node_id=node_id,
             )
         )
-        return node_id, result
+        return node_id, answer, tools_called
     except Exception as e:
-        return node_id, f"Node '{node_id}' (agent '{agent_type}') failed: {e}"
+        return node_id, f"Node '{node_id}' (agent '{agent_type}') failed: {e}", []
 
 
 _FIGURE_PATTERN = re.compile(r'(\$\s?\d[\d,]*\.?\d*|\d+(?:\.\d+)?%|\b\d+\.\d+\b)')
@@ -220,9 +221,13 @@ async def execute(
     verbose:    bool = True,
     session_id: str  = None,
     summary:    str  = None,
-) -> str:
+) -> tuple:
     """
-    Execute a DAG plan and return synthesized answer.
+    Execute a DAG plan and return (final_answer, node_tool_calls).
+
+    node_tool_calls is a dict mapping node_id -> list of tool-call records
+    (same structure as Trace.tools_called, including result_full) — used by
+    chart_agent.build_charts() to produce real-data charts without re-querying.
 
     Args:
         question: Original user question
@@ -247,14 +252,14 @@ async def execute(
             if verbose:
                 print(f"[Executor] Scope boundary — declining, "
                       f"no agent invoked: {dag[node_id].get('reason', '')}")
-            return SCOPE_DECLINE_MESSAGE
+            return SCOPE_DECLINE_MESSAGE, {}
 
     # Single agent — no synthesis needed
     # Single node — no synthesis needed
     if len(dag) == 1:
         node_id    = list(dag.keys())[0]
         agent_type = dag[node_id].get("agent", node_id)  # fallback for old-style DAGs
-        _, answer  = await _run_agent_async(
+        _, answer, tools_called = await _run_agent_async(
             node_id, agent_type, question, history, verbose, session_id
         )
         # Injection check runs UNCONDITIONALLY, unlike synthesis reflexion's
@@ -269,11 +274,12 @@ async def execute(
         answer = _run_injection_check(
             answer, question, {node_id: answer}, verbose, session_id
         )
-        return answer
+        return answer, {node_id: tools_called}
 
     # Multi-agent — execute in rounds
     # Multi-agent — execute in rounds
-    round_num = 1
+    round_num      = 1
+    node_tool_calls: dict = {}
     while remaining:
         ready = [
             node_id for node_id in remaining
@@ -343,8 +349,9 @@ async def execute(
             tasks.append(_run_agent_async(node_id, agent_type, enriched, history, verbose, session_id))
 
         results = await asyncio.gather(*tasks)
-        for node_id, answer in results:
+        for node_id, answer, tools_called in results:
             completed[node_id] = answer
+            node_tool_calls[node_id] = tools_called
             remaining.discard(node_id)
             if verbose:
                 print(f"\n[Executor] --- raw output: {node_id} ---\n{answer}\n"
@@ -471,8 +478,11 @@ async def execute(
             )
             retry_prompt = (
                 synthesis_prompt
-                + f"\n\nYour previous attempt had issues: {guidance}\n"
-                f"Revise the synthesis to fix this."
+                + f"\n\n[INTERNAL CORRECTION NOTE — do not reference, "
+                f"acknowledge, or respond to this note in your answer: "
+                f"{guidance}]\n\n"
+                f"Produce the corrected synthesis directly. Do not apologize, "
+                f"mention a previous attempt, or acknowledge any correction."
             )
             retry_response = client.messages.create(
                 model=SYNTH_MODEL,
@@ -481,6 +491,7 @@ async def execute(
                 messages=[{"role": "user", "content": retry_prompt}],
             )
             retry_answer = retry_response.content[0].text
+            retry_answer = _strip_correction_preamble(retry_answer)
             retry_critique = critique_synthesis(
                 question, agent_outputs, retry_answer, verbose
             )
@@ -508,4 +519,4 @@ async def execute(
     )
 
     synth_trace.flush()
-    return final_answer
+    return final_answer, node_tool_calls
