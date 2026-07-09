@@ -1,0 +1,86 @@
+{
+  "summary": {
+    "run_id": "2026-07-09T05-21-42",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "routing": "1/1"
+    },
+    "total_passed": 1,
+    "total_input_tokens": 9831,
+    "total_output_tokens": 347,
+    "estimated_total_cost_usd": 0.0116,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": []
+  },
+  "results": [
+    {
+      "run_id": "2026-07-09T05-21-42",
+      "id": "MEM-MARKET-001",
+      "question_id": "MEM-MARKET-001",
+      "tier": "stable",
+      "question": "How has it been performing lately?",
+      "added_reason": "First real multi-turn eval question. Tests carried-forward entity resolution across turns \u2014 \"it\" in the scored question has no antecedent without session memory. Confirms the planner's session summary/context_note correctly resolves the entity to AAPL rather than triggering the CLARIFICATION BOUNDARY missing-entity sentinel (which this exact phrasing WOULD trigger cold, with no prior turn \u2014 see CLARIFY-TRIGGER-001). Smoke-tested manually with this exact setup/scored pair combination before being written up as a permanent question \u2014 confirmed working end to end.\n",
+      "category": "routing",
+      "expected_agents": [
+        "market"
+      ],
+      "actual_agents": [
+        "market_1"
+      ],
+      "actual_agent_types": [
+        "market"
+      ],
+      "expected_dag_shape": "single",
+      "actual_dag_shape": "single",
+      "routing_pass": true,
+      "routing_reasons": [],
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "MarketAgent": [
+          "get_prices"
+        ]
+      },
+      "grounding_pass": true,
+      "forbidden_phrase_hits": [],
+      "injection_pass": null,
+      "injection_suspected": null,
+      "injection_judge_reasoning": null,
+      "expected_injection_suspected": null,
+      "advice_boundary_pass": null,
+      "advice_boundary_informative": null,
+      "advice_boundary_non_advisory": null,
+      "advice_boundary_reasoning": null,
+      "scope_boundary_pass": null,
+      "scope_boundary_declined": null,
+      "scope_boundary_reasoning": null,
+      "trajectory_pass": null,
+      "trajectory_adapted": null,
+      "trajectory_reasoning": null,
+      "planner_reasoning": null,
+      "session_id": "eval-MEM-MARKET-001-14ee5245",
+      "setup_turn_records": [
+        {
+          "question": "How is AAPL doing this year?",
+          "answer": "**Apple (AAPL) is performing well year-to-date in 2026:**\n\n**Summary (Jan 1 \u2013 Jun 29, 2026):**\n- **Start price:** $270.51\n- **End price:** $308.63\n- **% Change:** +14.1%\n- **High:** $317.40\n- **Low:** $242.97\n\nThe stock has gained 14.1% over the first six months of 2026, with the most significant strength coming in May and early June. After some weakness in late January and early March, AAPL rebounded sharply from late April onwards, reaching its cycle high of $317.40 in late May before experiencing some volatility in late June, though still closing the period well above its January levels."
+        }
+      ],
+      "final_answer": "**Apple (AAPL) \u2013 Last Month Performance (Jun 9 \u2013 Jul 2, 2026):**\n\n- **Start price:** $290.55\n- **End price:** $308.63\n- **% Change:** +6.2%\n- **High:** $309.42\n- **Low:** $273.75\n\nAAPL has been relatively volatile in the past month. The stock started the period near $290 and generally traded in the $290\u2013$302 range through mid-June. However, there was a sharp dip on June 25th, when it fell to a low of $273.75 (a roughly 6% drop from the prior week), followed by significant recovery on June 26th and into early July. The stock finished the month strong, rallying sharply on July 1\u20132 to close at $308.63, its cycle high for this period. The large spike in trading volume on June 25\u201326 suggests that period involved notable selling pressure followed by buying interest.",
+      "tokens_by_node": {
+        "market_1": {
+          "input_tokens": 9831,
+          "output_tokens": 347
+        },
+        "dag_executor": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      },
+      "total_input_tokens": 9831,
+      "total_output_tokens": 347,
+      "estimated_cost_usd": 0.01157,
+      "latency_ms": 26319,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

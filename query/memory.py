@@ -11,6 +11,7 @@ Summary item:   { session_id, timestamp="SUMMARY", content, turn_count, updated_
 """
 
 import os
+import re
 import time
 import datetime
 import boto3
@@ -22,7 +23,14 @@ from query.config import get_client  # Anthropic client factory
 ENV             = os.environ.get("ENV", "dev")
 TABLE_NAME      = f"trade-platform-{ENV}-conversations"
 TTL_DAYS        = 30
-SUMMARY_SK      = "SUMMARY"
+SUMMARY_SK                = "SUMMARY"
+PENDING_CLARIFICATION_SK  = "PENDING_CLARIFICATION"
+
+# Allowlist pattern for real conversation turns. Real turns use ISO datetime
+# strings produced by _now() (datetime.utcnow().isoformat()), which always
+# start with "YYYY-MM-DDTH...". Any special SK (SUMMARY, PENDING_CLARIFICATION,
+# or future additions) is a plain uppercase string that never starts with a digit.
+_ISO_TIMESTAMP_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T')
 
 RAW_TURNS_THRESHOLD = 8   # compress when raw turn count exceeds this
 COMPRESS_BATCH      = 3   # absorb this many old turns per compression pass
@@ -52,6 +60,19 @@ def _now() -> str:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+def is_real_turn(timestamp: str) -> bool:
+    """
+    True if this SK value represents an actual conversation turn
+    (not SUMMARY, PENDING_CLARIFICATION, or any future special SK
+    added later). Allowlists by SHAPE — real turns are always ISO
+    datetime strings from _now() — rather than blocklisting known
+    special values by name. This means any NEW special SK added
+    in the future is automatically excluded here with zero further
+    code changes needed anywhere that calls this function.
+    """
+    return bool(_ISO_TIMESTAMP_RE.match(timestamp or ""))
+
 
 def save_turn(session_id: str, role: str, content: str) -> None:
     """
@@ -105,7 +126,7 @@ def load_turns(session_id: str, max_turns: int = 10) -> list:
         ScanIndexForward=False,      # newest first from DynamoDB
         Limit=max_turns + 2,         # small buffer in case SUMMARY item appears
     )
-    items = [i for i in resp.get("Items", []) if i.get("timestamp") != SUMMARY_SK]
+    items = [i for i in resp.get("Items", []) if is_real_turn(i.get("timestamp", ""))]
     items = items[:max_turns]
     items.reverse()                  # back to chronological
     return [{"role": i["role"], "content": i["content"]} for i in items]
@@ -132,6 +153,43 @@ def clear_session(session_id: str) -> int:
     return len(items)
 
 
+# ── Pending clarification CRUD ───────────────────────────────────────────────
+# Mirrors the SUMMARY item pattern exactly: same table, different SK value.
+# Not part of raw-turn-count or compression logic — purely structural state.
+
+def get_pending_clarification(session_id: str) -> dict | None:
+    """Returns {original_question, question_asked} dict, or None if none pending."""
+    resp = _table().get_item(
+        Key={"session_id": session_id, "timestamp": PENDING_CLARIFICATION_SK}
+    )
+    item = resp.get("Item")
+    if not item:
+        return None
+    return {
+        "original_question": item.get("original_question"),
+        "question_asked":    item.get("question_asked"),
+    }
+
+
+def set_pending_clarification(
+    session_id: str, original_question: str, question_asked: str
+) -> None:
+    _table().put_item(Item={
+        "session_id":        session_id,
+        "timestamp":         PENDING_CLARIFICATION_SK,
+        "original_question": original_question,
+        "question_asked":    question_asked,
+        "created_at":        _now(),
+        "ttl":               _ttl(),
+    })
+
+
+def clear_pending_clarification(session_id: str) -> None:
+    _table().delete_item(
+        Key={"session_id": session_id, "timestamp": PENDING_CLARIFICATION_SK}
+    )
+
+
 # ── Internal: summary CRUD ────────────────────────────────────────────────────
 
 def _load_summary(session_id: str):
@@ -155,11 +213,11 @@ def _write_summary(session_id: str, content: str, turn_count: int) -> None:
 def _count_raw_turns(session_id: str) -> int:
     resp  = _table().query(
         KeyConditionExpression=Key("session_id").eq(session_id),
-        Select="COUNT",
+        ProjectionExpression="#ts",
+        ExpressionAttributeNames={"#ts": "timestamp"},
     )
-    total   = resp.get("Count", 0)
-    has_sum = _load_summary(session_id) is not None
-    return total - (1 if has_sum else 0)
+    items = resp.get("Items", [])
+    return sum(1 for i in items if is_real_turn(i.get("timestamp", "")))
 
 
 def _load_oldest_raw_turns(session_id: str, n: int) -> list:
@@ -169,7 +227,7 @@ def _load_oldest_raw_turns(session_id: str, n: int) -> list:
         ScanIndexForward=True,   # oldest first
         Limit=n + 2,
     )
-    items = [i for i in resp.get("Items", []) if i.get("timestamp") != SUMMARY_SK]
+    items = [i for i in resp.get("Items", []) if is_real_turn(i.get("timestamp", ""))]
     return items[:n]
 
 

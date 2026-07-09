@@ -25,9 +25,11 @@ def run(
     Route question through DAG planner and executor.
     Entry point for agent.py and server.py — synchronous wrapper around async execute.
 
-    Returns (final_answer: str, node_tool_calls: dict) where node_tool_calls maps
-    node_id -> list of tool-call records (Trace.tools_called structure, including
-    result_full) for use by chart_agent.build_charts().
+    Returns (final_answer: str, node_tool_calls: dict, metadata: dict) where
+    node_tool_calls maps node_id -> list of tool-call records (Trace.tools_called
+    structure, including result_full) for use by chart_agent.build_charts().
+    metadata is {} on all normal paths; {"awaiting_clarification": True} when the
+    planner returned a clarify sentinel and the response is a question, not an answer.
 
     context dict (from memory.load_context):
         { "summary": str|None, "context_note": str|None, "recent_turns": list }
@@ -50,7 +52,7 @@ def run(
     dag = plan(enriched_question, history=recent_turns, verbose=verbose,
                summary=summary)
 
-    final_answer, node_tool_calls = asyncio.run(execute(
+    final_answer, node_tool_calls, metadata = asyncio.run(execute(
         question=enriched_question,
         dag=dag,
         history=recent_turns,
@@ -58,4 +60,4 @@ def run(
         session_id=session_id,
         summary=summary,
     ))
-    return final_answer, node_tool_calls
+    return final_answer, node_tool_calls, metadata

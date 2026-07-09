@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from query import admin as admin_module
 from query import chart_agent
+from query import clarification
 from query.orchestrator import run as orchestrate
 import query.memory as memory
 
@@ -45,6 +46,12 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     chart_id: str | None = None
+
+
+class EvalRunRequest(BaseModel):
+    ids: list[str] | None = None
+    tier: str = "all"
+    include_retired: bool = False
 
 
 # ── Static routes ─────────────────────────────────────────────────────────────
@@ -79,9 +86,18 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
         if request.session_id:
             context = await run_in_threadpool(memory.load_context, request.session_id)
 
-        answer, node_tool_calls = await run_in_threadpool(
+        # Check-and-clear pending clarification BEFORE calling orchestrate.
+        # Shared with run_eval.py's multi-turn runner — see
+        # clarification.resolve_pending_clarification()'s docstring for why
+        # this logic lives there instead of being duplicated here.
+        effective_question = await run_in_threadpool(
+            clarification.resolve_pending_clarification,
+            request.session_id, request.question,
+        )
+
+        answer, node_tool_calls, meta = await run_in_threadpool(
             orchestrate,
-            request.question,
+            effective_question,
             context=context,
             verbose=False,
             session_id=request.session_id,
@@ -89,11 +105,9 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-    # Generate chart_id upfront — chart building runs async after response is sent
-    chart_id = str(uuid.uuid4())
-    chart_store[chart_id] = {"ready": False, "charts": []}
-
-    # Save turns after response (non-blocking)
+    # Save turns after response (non-blocking).
+    # Always save request.question (what the user typed), not effective_question
+    # (the merged version) — raw turn history reflects literal user input.
     if request.session_id:
         background_tasks.add_task(
             memory.save_turn, request.session_id, "user", request.question
@@ -101,8 +115,19 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
         background_tasks.add_task(
             memory.save_turn, request.session_id, "assistant", answer
         )
+        if meta.get("awaiting_clarification"):
+            background_tasks.add_task(
+                memory.set_pending_clarification,
+                request.session_id, effective_question, answer,
+            )
 
-    # Chart building — async, doesn't block response
+    # Chart building — skip entirely when we're just asking a clarifying
+    # question (no tool data was fetched, node_tool_calls will be empty).
+    if meta.get("awaiting_clarification"):
+        return AskResponse(answer=answer, chart_id=None)
+
+    chart_id = str(uuid.uuid4())
+    chart_store[chart_id] = {"ready": False, "charts": []}
     background_tasks.add_task(
         _extract_and_store_chart, chart_id, request.question, answer, node_tool_calls
     )
@@ -180,4 +205,35 @@ async def admin_trace_detail(key: str):
 @app.post("/admin/api/pipeline/{source}/fire")
 async def admin_fire_pipeline(source: str):
     data = await run_in_threadpool(admin_module.fire_pipeline, source)
+    return JSONResponse(content=data)
+
+
+# ── Eval runner endpoints ─────────────────────────────────────────────────────
+# Specific paths (/questions, /status, /run) must come before the /{run_id}/records
+# path-param route so FastAPI matches them as literals, not as run_id values.
+
+@app.get("/admin/api/evals/questions")
+async def admin_eval_questions():
+    data = await run_in_threadpool(admin_module.list_eval_questions)
+    return JSONResponse(content=data)
+
+
+@app.post("/admin/api/evals/run")
+async def admin_eval_run(request: EvalRunRequest):
+    data = await run_in_threadpool(
+        admin_module.trigger_eval_run,
+        request.ids, request.tier, request.include_retired,
+    )
+    return JSONResponse(content=data)
+
+
+@app.get("/admin/api/evals/status")
+async def admin_eval_status():
+    data = await run_in_threadpool(admin_module.get_eval_run_state)
+    return JSONResponse(content=data)
+
+
+@app.get("/admin/api/evals/{run_id}/records")
+async def admin_eval_records(run_id: str):
+    data = await run_in_threadpool(admin_module.get_eval_run_records, run_id)
     return JSONResponse(content=data)

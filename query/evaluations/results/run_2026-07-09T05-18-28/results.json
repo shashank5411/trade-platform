@@ -1,0 +1,94 @@
+{
+  "summary": {
+    "run_id": "2026-07-09T05-18-28",
+    "total_questions": 1,
+    "pass_rates_by_category": {
+      "routing": "1/1"
+    },
+    "total_passed": 1,
+    "total_input_tokens": 3706,
+    "total_output_tokens": 1371,
+    "estimated_total_cost_usd": 0.0106,
+    "note": "Cost estimate uses placeholder Haiku pricing and does not account for prompt-cache discounts \u2014 treat as directional, compare against your actual billing dashboard delta.",
+    "failures": []
+  },
+  "results": [
+    {
+      "run_id": "2026-07-09T05-18-28",
+      "id": "PAIR-FILINGS-SENTIMENT-001",
+      "question_id": "PAIR-FILINGS-SENTIMENT-001",
+      "tier": "stable",
+      "question": "What do insiders' trades suggest about AAPL, and what does their latest 10-K say about outlook?",
+      "added_reason": "Explicit planner rule \u2014 sentiment + filings parallel pairing",
+      "category": "routing",
+      "expected_agents": [
+        "filings",
+        "sentiment"
+      ],
+      "actual_agents": [
+        "sentiment_1",
+        "filings_1"
+      ],
+      "actual_agent_types": [
+        "filings",
+        "sentiment"
+      ],
+      "expected_dag_shape": "parallel",
+      "actual_dag_shape": "parallel",
+      "routing_pass": true,
+      "routing_reasons": [],
+      "tool_selection_pass": null,
+      "actual_tools_by_agent": {
+        "SentimentAgent": [
+          "get_insider_summary",
+          "get_news_summary"
+        ],
+        "FilingsAgent": [
+          "get_documents",
+          "get_prose",
+          "semantic_search"
+        ]
+      },
+      "grounding_pass": null,
+      "forbidden_phrase_hits": [],
+      "injection_pass": null,
+      "injection_suspected": null,
+      "injection_judge_reasoning": null,
+      "expected_injection_suspected": null,
+      "advice_boundary_pass": null,
+      "advice_boundary_informative": null,
+      "advice_boundary_non_advisory": null,
+      "advice_boundary_reasoning": null,
+      "scope_boundary_pass": null,
+      "scope_boundary_declined": null,
+      "scope_boundary_reasoning": null,
+      "trajectory_pass": null,
+      "trajectory_adapted": null,
+      "trajectory_reasoning": null,
+      "planner_reasoning": null,
+      "session_id": null,
+      "setup_turn_records": [],
+      "final_answer": "# AAPL Insider Trading and 10-K Outlook Summary\n\n## Insider Trading Signal\n\nOver the past 90 days (April\u2013July 2026), insiders executed **net selling activity only**: 6 open-market sales totaling ~$87.6M across 302,924 shares, with **zero open-market purchases**. \n\n**Critical caveat:** Most executive sales are executed under pre-planned Rule 10b5-1 programs established months in advance, so high sales volume alone is not a reliable bearish signal about near-term outlook. Purchases, by contrast, are typically discretionary and more meaningful. The absence of any offsetting discretionary insider purchases during this window leaves the signal unbalanced toward selling, though the data alone does not confirm a negative view of near-term prospects.\n\n## News Sentiment\n\nFinancial media coverage over the past 30 days leans **mixed-to-neutral**: 59% neutral articles, 29% negative, and 12% positive. Negative articles outnumber positive ones, but neutral tone dominates, indicating no strong consensus theme in coverage.\n\n## 10-K Outlook and Forward Guidance\n\n**Data gap:** Apple's latest 10-K is not currently available in the document system used for this analysis. A direct review of the SEC EDGAR filing (sec.gov) would be needed to assess management's forward guidance, risk disclosures, and strategic outlook.\n\n---\n\n**Summary:** Insiders show net selling with no discretionary purchases, and recent news sentiment is slightly negative overall but not strongly directional. Neither signal is independently conclusive, and both are consistent with a cautious or neutral posture rather than a bullish one. However, the full picture\u2014including management's own guidance and risk commentary in the 10-K\u2014cannot be completed without access to that filing.",
+      "tokens_by_node": {
+        "sentiment_1": {
+          "input_tokens": 1526,
+          "output_tokens": 694
+        },
+        "filings_1": {
+          "input_tokens": 2180,
+          "output_tokens": 677
+        },
+        "dag_executor": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      },
+      "total_input_tokens": 3706,
+      "total_output_tokens": 1371,
+      "estimated_cost_usd": 0.01056,
+      "latency_ms": 33515,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

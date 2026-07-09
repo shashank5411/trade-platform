@@ -77,6 +77,54 @@ including the capability boundaries that follow:
   matter itself has zero financial component, not when a financial
   question is dressed up in pressure tactics.
 
+CLARIFICATION BOUNDARY — check this after the scope boundary above,
+still before normal agent-assignment logic:
+
+  Return a "clarify" sentinel INSTEAD of a normal DAG ONLY when
+  BOTH of these are true: (1) the question has a genuine financial
+  component (so scope boundary above does not apply), AND (2) it is
+  missing information that is REQUIRED to answer at all, with no
+  reasonable default or resolvable reference available — not merely
+  ambiguous-but-resolvable, and not merely lacking an explicit date
+  range (which already has documented defaults below).
+
+  The ONLY two cases that qualify:
+    a) MISSING REQUIRED ENTITY — the question references "the
+       stock", "the company", "it", or similar, with no ticker or
+       company name anywhere in the question OR in the provided
+       conversation context, and no reasonable default exists.
+       Do NOT use this for names that just need disambiguation
+       (e.g. "GM" as ticker vs. abbreviation) — the receiving
+       agent's own entity-resolution-transparency rule already
+       handles that by stating the resolved name inline; this
+       sentinel is only for TRULY absent entities, not ambiguous
+       ones.
+    b) CONTRADICTORY DATE RANGE — an explicit date range where the
+       end date is before the start date, or a relative date phrase
+       that cannot be resolved to any coherent window at all. Do
+       NOT use this for merely vague timing (e.g. "recently",
+       "lately") — the IMPLICIT DATE RESOLUTION section below
+       already has documented defaults for those; using this
+       sentinel there would contradict those defaults and make the
+       system needlessly question-happy.
+
+  This must be RARE. If a reasonable default or an existing
+  resolution rule elsewhere in this prompt could handle the
+  ambiguity, use that instead of asking — asking the user is the
+  exception, not the default response to any uncertainty.
+
+  Return:
+  {{
+    "agents": {{
+      "clarify_1": {{"agent": "clarify", "depends_on": [],
+                     "question_for_user": "the specific question
+                     to ask the user — short, direct, answerable
+                     in a few words",
+                     "reason": "why required info is missing"}}
+    }},
+    "reasoning": "..."
+  }}
+
 Agent capability boundaries — apply these BEFORE any other rules:
   filings:   handles ALL Fed document content — what the Fed has SAID.
     Has get_fed_communications and semantic_search over FOMC statements,
@@ -418,6 +466,24 @@ def plan(question: str, history: list = None,
             print(f"\n[Planner] Scope boundary — declining: {decline_reason}")
         return {"decline_1": {"agent": "decline", "depends_on": [],
                                "reason": reasoning}}
+
+    # Clarification sentinel — same pattern as decline above: "clarify" is
+    # intentionally NOT a registered agent type, so it must be caught here
+    # before the registry-validation filter below strips it out and lets
+    # the question fall through to the market fallback.
+    if any(v.get("agent") == "clarify" for v in dag.values()):
+        clarify_node = next(
+            v for v in dag.values() if v.get("agent") == "clarify"
+        )
+        if verbose:
+            print(f"\n[Planner] Clarification needed: "
+                  f"{clarify_node.get('question_for_user', '')}")
+        return {"clarify_1": {
+            "agent":             "clarify",
+            "depends_on":        [],
+            "question_for_user": clarify_node.get("question_for_user", ""),
+            "reason":            reasoning,
+        }}
 
     # Validate agent TYPES against registry (k is now a node_id, not an
     # agent name — the agent type lives in v["agent"])

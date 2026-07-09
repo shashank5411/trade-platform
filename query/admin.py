@@ -9,11 +9,13 @@ fast AWS metadata calls only.
 import os
 import json
 import glob
+import threading as _threading
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from query.memory import is_real_turn
 
 # ── Config ─────────────────────────────────────────────────────────────────
 
@@ -177,13 +179,14 @@ def get_sessions(limit: int = 20) -> list:
                     if line.strip().startswith("CONTEXT_NOTE"):
                         s["context_note"] = line.split(":", 1)[-1].strip()[:120]
                         break
-            else:
+            elif is_real_turn(ts):
                 # Raw turn — use its timestamp as a last_active candidate
                 if ts and (s["last_active"] is None or ts > s["last_active"]):
                     s["last_active"] = ts
                 # Count user messages only so turn_count = number of Q+A pairs
                 if item.get("role") == "user":
                     s["turn_count"] += 1
+            # else: non-turn session-state item (e.g. pending clarification) — skip
 
         if "LastEvaluatedKey" not in resp:
             break
@@ -216,7 +219,7 @@ def get_evals() -> dict:
     for path in run_files[:10]:
         run_id = os.path.basename(os.path.dirname(path)).replace("run_", "")
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
 
             # data may be a list of question records or a dict with a "results" key
@@ -330,12 +333,13 @@ def get_session_detail(session_id: str) -> dict:
                 "turn_count": int(item.get("turn_count", 0)),
                 "updated_at": item.get("updated_at"),
             }
-        else:
+        elif is_real_turn(ts):
             turns.append({
                 "role":      item.get("role"),
                 "content":   item.get("content"),
                 "timestamp": ts,
             })
+        # else: non-turn session-state item (e.g. pending clarification) — skip
 
     turns.sort(key=lambda x: x.get("timestamp") or "")
 
@@ -373,6 +377,121 @@ def get_trace_detail(s3_key: str) -> dict:
             "tools_called":        trace.get("tools_called", []),
             "answer_preview":      trace.get("answer_preview", ""),
         }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Eval run state ────────────────────────────────────────────────────────────
+# One eval run at a time. Lock guards both the "is running?" check and the
+# state-dict mutation so trigger_eval_run() is safe under concurrent requests.
+
+_eval_run_lock  = _threading.Lock()
+_eval_run_state: dict = {
+    "status":      "idle",   # idle | running | done | error
+    "run_id":      None,
+    "started_at":  None,
+    "finished_at": None,
+    "error":       None,
+    "summary":     None,
+}
+
+
+def list_eval_questions() -> list:
+    """
+    Return every question in questions.yaml (all statuses: active, retired,
+    draft) with UI-relevant fields. Reads the YAML directly — NOT via
+    load_questions() — so the UI picker shows every question regardless
+    of runner status-filtering rules (draft questions are excluded from
+    actual runs but should still be visible in the picker with their
+    status badge, so the user can see they exist and explicitly select
+    them by ID if wanted).
+    """
+    import yaml as _yaml
+    questions_path = os.path.join(
+        os.path.dirname(__file__), "evaluations", "questions.yaml"
+    )
+    with open(questions_path, encoding="utf-8") as f:
+        data = _yaml.safe_load(f)
+    return [
+        {
+            "id":              q.get("id"),
+            "question":        q.get("question"),
+            "category":        q.get("category"),
+            "status":          q.get("status", "active"),
+            "tier":            q.get("tier", "stable"),
+            "added_reason":    q.get("added_reason", ""),
+            "has_setup_turns": bool(q.get("setup_turns")),
+        }
+        for q in data.get("questions", [])
+    ]
+
+
+def trigger_eval_run(ids: list = None, tier: str = "all",
+                     include_retired: bool = False) -> dict:
+    """
+    Start a background eval run. Rejects if one is already in progress.
+    Returns {"ok": True, "run_id": ...} or {"ok": False, "error": ...}.
+    """
+    with _eval_run_lock:
+        if _eval_run_state["status"] == "running":
+            return {"ok": False, "error": "An eval run is already in progress"}
+
+        from query.evaluations.run_eval import load_questions, run_eval as _run_eval
+        questions = load_questions(include_retired=include_retired, ids=ids)
+        if tier != "all":
+            questions = [q for q in questions if q.get("tier", "stable") == tier]
+
+        if not questions:
+            return {"ok": False, "error": "No matching questions found"}
+
+        run_id = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+        _eval_run_state.update({
+            "status":      "running",
+            "run_id":      run_id,
+            "started_at":  datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "error":       None,
+            "summary":     None,
+        })
+
+    def _worker():
+        try:
+            result = _run_eval(questions, run_id=run_id, quiet=True)
+            with _eval_run_lock:
+                _eval_run_state.update({
+                    "status":      "done",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "summary":     result["summary"],
+                })
+        except Exception as exc:
+            with _eval_run_lock:
+                _eval_run_state.update({
+                    "status":      "error",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "error":       str(exc),
+                })
+
+    _threading.Thread(target=_worker, daemon=True).start()
+    return {"ok": True, "run_id": run_id}
+
+
+def get_eval_run_state() -> dict:
+    """Return a snapshot of the current eval run state."""
+    with _eval_run_lock:
+        return dict(_eval_run_state)
+
+
+def get_eval_run_records(run_id: str) -> dict:
+    """
+    Load full results for run_id from disk.
+    Returns {"summary": ..., "results": [...]} or {"error": ...}.
+    """
+    json_path = os.path.join(EVAL_RESULTS_DIR, f"run_{run_id}", "results.json")
+    try:
+        with open(json_path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"error": f"Run {run_id} not found on disk"}
     except Exception as e:
         return {"error": str(e)}
 

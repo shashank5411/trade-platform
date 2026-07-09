@@ -64,6 +64,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 
 import yaml
 
@@ -71,6 +72,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from query.planner import plan, _resolve_rounds
 from query.dag_executor import execute
 from query.config import get_client
+from query import memory
+from query import clarification
+from query.orchestrator import run as orchestrate
 
 JUDGE_MODEL = "claude-haiku-4-5-20251001"
 QUESTIONS_PATH = os.path.join(os.path.dirname(__file__), "questions.yaml")
@@ -109,13 +113,28 @@ class Tee:
 # ── Loading ──────────────────────────────────────────────────────────────────
 
 def load_questions(include_retired: bool = False, category: str = None,
-                    only_id: str = None) -> list:
-    with open(QUESTIONS_PATH) as f:
+                    only_id: str = None, ids: list = None) -> list:
+    with open(QUESTIONS_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     qs = data["questions"]
 
-    if not include_retired:
+    if ids:
+        # Explicit ID selection bypasses status filtering entirely —
+        # picking specific questions by ID is already a deliberate,
+        # unambiguous choice. Runs whatever status those questions
+        # actually have (active, draft, or retired) without requiring
+        # include_retired to also be set.
+        id_set = set(ids)
+        qs = [q for q in qs if q.get("id") in id_set]
+    elif include_retired:
+        # "Include retired" means "also show retired history" — it does
+        # NOT mean "also run draft questions," which are a separate
+        # concern (not yet ready to run meaningfully, not simply old or
+        # superseded). Draft stays excluded even when include_retired=True.
+        qs = [q for q in qs if q.get("status") != "draft"]
+    else:
         qs = [q for q in qs if q.get("status") == "active"]
+
     if category:
         qs = [q for q in qs if q.get("category") == category]
     if only_id:
@@ -492,6 +511,46 @@ def score_injection(question: dict, injection_result: dict, answer: str) -> dict
     }
 
 
+# ── Multi-turn setup ─────────────────────────────────────────────────────────
+
+def _run_setup_turns(session_id: str, setup_turns: list,
+                     verbose: bool = True) -> list:
+    """
+    Execute each setup turn in sequence against session_id, using
+    the exact same load_context -> orchestrate -> save_turn pattern
+    query/agent.py's run_question() uses for a real conversation.
+    Setup turns are NOT scored — only run to establish real
+    conversational/memory state for the final scored question that
+    follows. Returns a list of {question, answer} records, kept
+    unscored on the result record purely for debugging visibility.
+    """
+    records = []
+    for turn in setup_turns:
+        turn_question = turn["question"]
+        effective_turn_question = clarification.resolve_pending_clarification(
+            session_id, turn["question"]
+        )
+        context = memory.load_context(session_id)
+        if verbose:
+            print(f"  [Setup turn] {turn_question[:80]}...")
+        answer, _, meta = orchestrate(
+            effective_turn_question,
+            context=context,
+            verbose=verbose,
+            session_id=session_id,
+        )
+        # Save the raw, unmerged question text — matches what a real
+        # turn's history would contain.
+        memory.save_turn(session_id, "user", turn_question)
+        memory.save_turn(session_id, "assistant", answer)
+        if meta.get("awaiting_clarification"):
+            memory.set_pending_clarification(
+                session_id, effective_turn_question, answer
+            )
+        records.append({"question": turn_question, "answer": answer})
+    return records
+
+
 # ── Per-question execution ───────────────────────────────────────────────────
 
 def run_one_question(question: dict, verbose: bool = True) -> dict:
@@ -508,6 +567,7 @@ def run_one_question(question: dict, verbose: bool = True) -> dict:
         "question_id": qid,
         "tier": question.get("tier", "stable"),
         "question": q_text,
+        "added_reason": question.get("added_reason", ""),
         "category": category,
         "expected_agents": question.get("expected_agents", []),
         "actual_agents": [],
@@ -535,6 +595,8 @@ def run_one_question(question: dict, verbose: bool = True) -> dict:
         "trajectory_adapted": None,
         "trajectory_reasoning": None,
         "planner_reasoning": None,
+        "session_id": None,
+        "setup_turn_records": [],
         "final_answer": None,
         "tokens_by_node": {},
         "total_input_tokens": 0,
@@ -578,6 +640,15 @@ def run_one_question(question: dict, verbose: bool = True) -> dict:
         record["passed"]                    = scored["pass"]
         return record
 
+    setup_turns = question.get("setup_turns")
+    session_id  = None
+    if setup_turns:
+        session_id = f"eval-{qid}-{uuid.uuid4().hex[:8]}"
+        record["session_id"] = session_id
+        record["setup_turn_records"] = _run_setup_turns(
+            session_id, setup_turns, verbose=verbose
+        )
+
     global _captured_tool_calls, _captured_tokens
     _captured_tool_calls = {}
     _captured_tokens = {}
@@ -588,12 +659,46 @@ def run_one_question(question: dict, verbose: bool = True) -> dict:
     original_injection_check = _wrap_injection_check()
 
     try:
-        dag = plan(q_text, verbose=verbose)
-        record["actual_agents"] = list(dag.keys())
-        record["actual_dag_shape"] = classify_dag_shape(dag)
+        if session_id:
+            # Multi-turn path — must keep using plan()/execute() directly
+            # (not orchestrator.run()) so routing can still be scored
+            # against the real dag dict, exactly like every other
+            # question in this file. Manually replicate the context-
+            # loading and question-enrichment orchestrator.run() does
+            # internally, since we're intentionally bypassing it here.
+            effective_q_text = clarification.resolve_pending_clarification(
+                session_id, q_text
+            )
+            context = memory.load_context(session_id)
+            context_note = context.get("context_note")
+            enriched_q = effective_q_text
+            if context_note:
+                enriched_q = f"[Session context: {context_note}]\n\n{effective_q_text}"
 
-        answer = asyncio.run(execute(q_text, dag, verbose=verbose))
-        record["final_answer"] = answer
+            dag = plan(enriched_q, history=context.get("recent_turns", []),
+                       verbose=verbose, summary=context.get("summary"))
+            record["actual_agents"] = list(dag.keys())
+            record["actual_dag_shape"] = classify_dag_shape(dag)
+
+            answer, _, _ = asyncio.run(execute(
+                enriched_q, dag, history=context.get("recent_turns", []),
+                verbose=verbose, session_id=session_id,
+                summary=context.get("summary"),
+            ))
+            record["final_answer"] = answer
+
+            # Save raw question text (not enriched) — matches what real
+            # turns contain in server.py/agent.py.
+            memory.save_turn(session_id, "user", q_text)
+            memory.save_turn(session_id, "assistant", answer)
+        else:
+            # Existing single-turn path — completely unchanged.
+            dag = plan(q_text, verbose=verbose)
+            record["actual_agents"] = list(dag.keys())
+            record["actual_dag_shape"] = classify_dag_shape(dag)
+
+            answer, _, _ = asyncio.run(execute(q_text, dag, verbose=verbose))
+            record["final_answer"] = answer
 
         record["actual_tools_by_agent"] = dict(_captured_tool_calls)
 
@@ -841,6 +946,73 @@ def build_summary(run_id: str, records: list) -> dict:
     }
 
 
+# ── Eval runner ──────────────────────────────────────────────────────────────
+
+def run_eval(questions: list, run_id: str = None, quiet: bool = False) -> dict:
+    """
+    Run eval for a pre-loaded list of questions.
+    Returns {summary, results, run_dir, json_path, log_path}.
+    Called by main() (CLI) and by admin.trigger_eval_run() (background thread).
+    """
+    if not questions:
+        return {"summary": None, "results": [], "run_dir": None, "json_path": None}
+
+    if run_id is None:
+        run_id = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+
+    run_dir   = os.path.join(RESULTS_DIR, f"run_{run_id}")
+    os.makedirs(run_dir, exist_ok=True)
+    log_path  = os.path.join(run_dir, "console.log")
+    json_path = os.path.join(run_dir, "results.json")
+
+    real_stdout = sys.stdout
+    log_file    = open(log_path, "w", encoding="utf-8")
+    sys.stdout  = Tee(real_stdout, log_file)
+
+    try:
+        print(f"\n[Eval Run {run_id}] {len(questions)} questions to run\n")
+
+        records = []
+        for q in questions:
+            record = run_one_question(q, verbose=not quiet)
+            record["run_id"] = run_id
+            records.append(record)
+
+        summary = build_summary(run_id, records)
+
+        with open(json_path, "w", encoding="utf-8") as fj:
+            json.dump({"summary": summary, "results": records}, fj, indent=2, default=str)
+
+        if not quiet:
+            print(f"\n{'='*60}")
+            print(f"  EVAL RUN COMPLETE — {run_id}")
+            print(f"{'='*60}")
+            print(f"  Total: {summary['total_questions']}  Passed: {summary['total_passed']}")
+            print(f"  By category: {summary['pass_rates_by_category']}")
+            print(f"  Tokens: {summary['total_input_tokens']:,} in / "
+                  f"{summary['total_output_tokens']:,} out — "
+                  f"est. cost: ${summary['estimated_total_cost_usd']:.4f} "
+                  f"(rough estimate, see note in JSON)")
+            if summary["failures"]:
+                print(f"\n  Failures:")
+                for fail in summary["failures"]:
+                    print(f"    [{fail['id']}] ({fail['category']}) {fail['reason']}")
+            print(f"\n  Results folder: {run_dir}")
+            print(f"  JSON:    {json_path}")
+            print(f"  Console: {log_path}\n")
+
+        return {
+            "summary":   summary,
+            "results":   records,
+            "run_dir":   run_dir,
+            "json_path": json_path,
+            "log_path":  log_path,
+        }
+    finally:
+        sys.stdout = real_stdout
+        log_file.close()
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -884,60 +1056,20 @@ def main():
         print("No matching active questions found.")
         return
 
-    run_id  = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    run_dir = os.path.join(RESULTS_DIR, f"run_{run_id}")
-    os.makedirs(run_dir, exist_ok=True)
+    result = run_eval(questions, quiet=args.quiet)
 
-    log_path = os.path.join(run_dir, "console.log")
-    json_path = os.path.join(run_dir, "results.json")
-
-    real_stdout = sys.stdout
-    log_file    = open(log_path, "w", encoding="utf-8")
-    sys.stdout  = Tee(real_stdout, log_file)
-
-    try:
-        print(f"\n[Eval Run {run_id}] {len(questions)} questions to run\n")
-
-        records = []
-        for q in questions:
-            record = run_one_question(q, verbose=not args.quiet)
-            record["run_id"] = run_id
-            records.append(record)
-
-        summary = build_summary(run_id, records)
-
-        with open(json_path, "w") as f:
-            json.dump({"summary": summary, "results": records}, f, indent=2, default=str)
-
-        if args.out:
-            # Write the same {summary, results} shape as the timestamped
-            # file, not summary alone — check_gate.py's split_by_tier()
-            # reads data["results"] (or a bare list); a summary-only file
-            # has no "results" key, which would make check_gate.py fall
-            # back to an empty record list and pass vacuously every time,
-            # regardless of actual outcome.
-            with open(args.out, "w") as f:
-                json.dump({"summary": summary, "results": records}, f, indent=2, default=str)
-
-        print(f"\n{'='*60}")
-        print(f"  EVAL RUN COMPLETE — {run_id}")
-        print(f"{'='*60}")
-        print(f"  Total: {summary['total_questions']}  Passed: {summary['total_passed']}")
-        print(f"  By category: {summary['pass_rates_by_category']}")
-        print(f"  Tokens: {summary['total_input_tokens']:,} in / "
-              f"{summary['total_output_tokens']:,} out — "
-              f"est. cost: ${summary['estimated_total_cost_usd']:.4f} "
-              f"(rough estimate, see note in JSON)")
-        if summary["failures"]:
-            print(f"\n  Failures:")
-            for f in summary["failures"]:
-                print(f"    [{f['id']}] ({f['category']}) {f['reason']}")
-        print(f"\n  Results folder: {run_dir}")
-        print(f"  JSON:    {json_path}")
-        print(f"  Console: {log_path}\n")
-    finally:
-        sys.stdout = real_stdout
-        log_file.close()
+    if args.out:
+        # Write the same {summary, results} shape as the timestamped
+        # file, not summary alone — check_gate.py's split_by_tier()
+        # reads data["results"] (or a bare list); a summary-only file
+        # has no "results" key, which would make check_gate.py fall
+        # back to an empty record list and pass vacuously every time,
+        # regardless of actual outcome.
+        with open(args.out, "w", encoding="utf-8") as fout:
+            json.dump(
+                {"summary": result["summary"], "results": result["results"]},
+                fout, indent=2, default=str,
+            )
 
 
 if __name__ == "__main__":

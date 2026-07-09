@@ -55,7 +55,7 @@ def run_question(
               f"from session '{session_id}'")
 
     # Run through orchestrator
-    answer, node_tool_calls = orchestrate(
+    answer, node_tool_calls, _ = orchestrate(
         question,
         context=context,
         verbose=verbose,

@@ -223,11 +223,15 @@ async def execute(
     summary:    str  = None,
 ) -> tuple:
     """
-    Execute a DAG plan and return (final_answer, node_tool_calls).
+    Execute a DAG plan and return (final_answer, node_tool_calls, metadata).
 
     node_tool_calls is a dict mapping node_id -> list of tool-call records
     (same structure as Trace.tools_called, including result_full) — used by
     chart_agent.build_charts() to produce real-data charts without re-querying.
+
+    metadata is {} on all normal paths. When the planner returned a "clarify"
+    sentinel, metadata is {"awaiting_clarification": True} and node_tool_calls
+    is {} (no agent was invoked).
 
     Args:
         question: Original user question
@@ -252,9 +256,18 @@ async def execute(
             if verbose:
                 print(f"[Executor] Scope boundary — declining, "
                       f"no agent invoked: {dag[node_id].get('reason', '')}")
-            return SCOPE_DECLINE_MESSAGE, {}
+            return SCOPE_DECLINE_MESSAGE, {}, {}
 
-    # Single agent — no synthesis needed
+    if len(dag) == 1:
+        node_id = list(dag.keys())[0]
+        if dag[node_id].get("agent") == "clarify":
+            question_for_user = dag[node_id].get("question_for_user",
+                "Could you clarify your question?")
+            if verbose:
+                print(f"[Executor] Clarification needed, no agent "
+                      f"invoked: {question_for_user}")
+            return question_for_user, {}, {"awaiting_clarification": True}
+
     # Single node — no synthesis needed
     if len(dag) == 1:
         node_id    = list(dag.keys())[0]
@@ -274,7 +287,7 @@ async def execute(
         answer = _run_injection_check(
             answer, question, {node_id: answer}, verbose, session_id
         )
-        return answer, {node_id: tools_called}
+        return answer, {node_id: tools_called}, {}
 
     # Multi-agent — execute in rounds
     # Multi-agent — execute in rounds
@@ -519,4 +532,4 @@ async def execute(
     )
 
     synth_trace.flush()
-    return final_answer, node_tool_calls
+    return final_answer, node_tool_calls, {}

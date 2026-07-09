@@ -29,7 +29,7 @@ DEFAULT_THRESHOLD = 0.60
 
 
 def load_results(path: str) -> dict:
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 

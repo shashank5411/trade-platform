@@ -22,7 +22,12 @@
 #   source_tags        — which underlying data sources this question exercises; used to
 #                        find/extend coverage when a new source is added, never read by
 #                        the runner's scoring logic itself
-#   status             — active | retired
+#   status             — active | retired | draft. draft = not yet ready
+#                        to run meaningfully (e.g. missing scoring support
+#                        for a field it depends on) — excluded from BOTH
+#                        default runs AND include_retired=True runs, unless
+#                        explicitly selected by id. Only promote to active
+#                        once its full scoring path is built and verified.
 #   tier               — optional, stable | monitored. Defaults to stable when absent
 #                        (run_eval.py's question.get("tier", "stable") and check_gate.py's
 #                        r.get("tier", "stable") both apply this same fail-safe default).
@@ -38,6 +43,26 @@
 #                        for this question's run only. Used by the injection category to
 #                        inject adversarial (or, for control questions, deliberately clean)
 #                        fixture content without needing a real scraped attack corpus.
+#   setup_turns        — optional, list of {question: str} dicts. When
+#                        present, this question runs MULTI-TURN: each
+#                        setup turn executes in sequence against a
+#                        real, persistent session_id (auto-generated
+#                        per run, e.g. "eval-<id>-<random>") via
+#                        orchestrator.run() — the exact same
+#                        load_context -> orchestrate -> save_turn
+#                        pattern query/agent.py's run_question() uses
+#                        for a real conversation. Setup turns are NOT
+#                        individually scored — they exist purely to
+#                        establish conversational state (memory
+#                        summary, carried-forward entities, a pending
+#                        clarification, etc) the same way a real
+#                        user's prior turns would, before the actual
+#                        scored `question` field runs against that
+#                        same accumulated session state. The session
+#                        is NOT cleaned up afterward (left in DynamoDB
+#                        — harmless in dev). Absent or empty = today's
+#                        existing fully-stateless single-turn
+#                        behavior, completely unchanged.
 #   expected_injection_suspected — required for category: injection, bool. What
 #                        reflexion.check_injection_provenance()'s judge should conclude
 #                        for this question's final answer.
@@ -72,6 +97,15 @@
 #                        fewer than 2 captured tool calls hard-FAILS (not skipped), since
 #                        that means the data condition the question depends on didn't
 #                        reproduce that run.
+#   expected_summary_contains — list of str. NOT YET SCORED — no corresponding
+#                        check exists in run_eval.py yet. Intended to verify
+#                        substrings appear in the session's structured memory
+#                        summary (memory.load_context()'s "summary" field),
+#                        read right before the final scored turn runs. Any
+#                        question using this field should stay status: draft
+#                        until the scoring support is built — see
+#                        COMPRESS-001/002 for the intended usage pattern
+#                        once it exists.
 #   added_date / added_reason
 #   retired_date / retired_reason — null until retired
 
@@ -819,6 +853,47 @@ questions:
     retired_date: null
     retired_reason: null
 
+  - id: REFLEXION-FORCE-001
+    question: "How did the 10-2 Treasury spread change over the last 6 weeks?"
+    category: grounding
+    expected_agents: [macro]
+    expected_answer_contains: "basis point"
+    source_tags: [fred]
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      Regression guard for _needs_reflexion_despite_length() in
+      reflexion.py — targets the exact failure shape that caused
+      NULL-MACRO-001's original miss: a short answer (148 words) with
+      multiple distinct numeric figures and derived/comparative
+      language ("compression", "change", "since", etc.) skipped
+      Reflexion entirely under the old word-count-only 200-word gate
+      (REFLEXION_MIN_WORDS), shipping a wrong basis-point delta with
+      no critic pass. This question is deliberately shaped to match
+      that same risk pattern (two dated Treasury yield figures, a
+      derived spread-change calculation, likely well under 200 words)
+      so it should trip _needs_reflexion_despite_length()'s forced-
+      reflexion override every time it runs.
+
+      No schema field exists to assert "reflexion ran" directly — this
+      checks the OUTCOME the fix exists to protect (a correctly
+      computed, internally consistent spread change) rather than the
+      internal mechanism. expected_answer_contains: "basis point" is a
+      light sanity check that the agent expresses the change in the
+      units a Treasury-spread question should use, not a correctness
+      check on the number itself (no fixed number is asserted, since
+      the real spread value changes over time and isn't something this
+      question should hardcode).
+
+      If this heuristic ever silently regresses — REFLEXION_MIN_WORDS
+      changed, the derived-claim regex pattern drifts, or model
+      phrasing stops matching _DERIVED_CLAIM_PATTERN/
+      _MULTI_FIGURE_PATTERN in reflexion.py — a wrong delta reappearing
+      on this question is the signal to investigate, the same way it
+      was the signal the first time.
+    retired_date: null
+    retired_reason: null
+
   # ── Injection-defense coverage (structural tagging + provenance judge) ────
 
   - id: INJECT-DIRECT-001
@@ -1062,16 +1137,357 @@ questions:
 # A human reviews and moves accepted entries into this file.
 
 # ── Deferred — not yet added to this file ───────────────────────────────────
-# MEM-MARKET-001, MEM-MACRO-SENTIMENT-001, MEM-CLARIFY-001 — drafted
-# 2026-06-24 to test multi-turn conversation memory (--session / history),
-# a real, working, deployed feature (memory.py + DynamoDB conversations
-# table) with currently ZERO eval coverage. Not added because run_eval.py
-# calls plan()/execute() statelessly with no history/session_id BY DESIGN
-# (confirmed 2026-06-23: this is deliberate, so eval runs stay reproducible
-# and order-independent, not an oversight). Adding these requires teaching
-# run_eval.py to execute a sequence of setup turns against a real session
-# before scoring the final question — real runner work, not just a schema
-# addition. Revisit as its own scoped follow-up if/when worth the effort.
-# Also unresolved if added: whether score_routing can represent an
-# expected EMPTY agent list (MEM-CLARIFY-001's case — answerable from
-# history alone, no agent should run) — needs verification, not assumed.
+# MEM-MARKET-001 and MEM-MACRO-SENTIMENT-001, originally drafted 2026-06-24
+# and deferred here for the reasons below, GRADUATED to active questions
+# on 2026-07-07 once multi-turn setup_turns support was built into
+# run_eval.py (see the "GROUP A" section further down) — see those two
+# entries directly for their current form and smoke-test confirmation.
+#
+# MEM-CLARIFY-001 remains genuinely parked, not just infrastructure-
+# blocked: its premise (a question answerable purely from prior session
+# context, where NO agent should run at all) needs a planner-level
+# "memory-satisfied" sentinel that doesn't exist yet — planner.py's
+# current fallback always forces an empty DAG into a MarketAgent default
+# (see the "if not dag:" fallback), so there is structurally no way for
+# this question to pass regardless of how good memory/context is. This
+# is a genuine agentic-design gap, not a runner-infrastructure one (which
+# is what originally blocked MEM-MARKET-001/MEM-MACRO-SENTIMENT-001) —
+# revisit once/if a third planner sentinel (alongside decline/clarify)
+# for "fully answerable from memory alone" is designed and built.
+# ═══════════════════════════════════════════════════════════════════
+# Memory, clarification, and compression coverage — added 2026-07-07
+# ═══════════════════════════════════════════════════════════════════
+#
+# Grouped by the infrastructure each depends on:
+#
+#   GROUP A — depends only on multi-turn setup_turns support (built
+#     2026-07-07) and the planner's CLARIFICATION BOUNDARY sentinel.
+#     All active.
+#
+#   GROUP B — depends additionally on
+#     clarification.resolve_pending_clarification(), a function shared
+#     by server.py's /ask handler and this runner's multi-turn logic
+#     (extracted 2026-07-07 so both callers use one implementation
+#     instead of two independent copies that could drift — see
+#     is_real_turn() in memory.py for the same discipline applied
+#     earlier this session). CLARIFY-MERGE-001 and CLARIFY-ABANDON-001
+#     are active; CLARIFY-STALE-STATE-001 stays status: draft, still
+#     blocked on Group C below.
+#
+#   GROUP C — depends on expected_summary_contains scoring support in
+#     run_eval.py, which does not exist yet (memory.load_context() is
+#     already public and already returns the structured summary — this
+#     just needs new scoring logic in run_one_question() to read it
+#     back and compare against expected substrings; no architecture
+#     change needed). COMPRESS-001, COMPRESS-002, and
+#     CLARIFY-STALE-STATE-001 all stay status: draft until this lands.
+
+# ═══════════════════════════════════════════════════════════════════
+# GROUP A — ready today
+# ═══════════════════════════════════════════════════════════════════
+
+  - id: MEM-MARKET-001
+    question: "How has it been performing lately?"
+    setup_turns:
+      - question: "How is AAPL doing this year?"
+    category: routing
+    expected_agents: [market]
+    expected_dag_shape: single
+    expected_answer_contains: "AAPL"
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      First real multi-turn eval question. Tests carried-forward entity
+      resolution across turns — "it" in the scored question has no
+      antecedent without session memory. Confirms the planner's session
+      summary/context_note correctly resolves the entity to AAPL rather
+      than triggering the CLARIFICATION BOUNDARY missing-entity sentinel
+      (which this exact phrasing WOULD trigger cold, with no prior
+      turn — see CLARIFY-TRIGGER-001). Smoke-tested manually with this
+      exact setup/scored pair combination before being written up as a
+      permanent question — confirmed working end to end.
+    retired_date: null
+    retired_reason: null
+
+  - id: MEM-MACRO-SENTIMENT-001
+    question: "Have insiders been buying or selling there recently?"
+    setup_turns:
+      - question: "What's the Fed funds rate been doing, and how might that affect JPM?"
+    category: routing
+    expected_agents: [sentiment]
+    expected_dag_shape: single
+    expected_answer_contains: "JPM"
+    source_tags: [fred, sec_form4]
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      Cross-agent, cross-topic entity carryover — deliberately harder
+      than MEM-MARKET-001, which only tests carryover within the same
+      topic/agent family. Here the entity (JPM) is established via a
+      macro-flavored setup question, and the scored question asks a
+      completely different specialist (sentiment) about the same
+      entity using a vague reference ("there"). Tests whether the
+      session summary's ENTITIES field survives a topic switch, not
+      just a same-agent follow-up.
+    retired_date: null
+    retired_reason: null
+
+  - id: CLARIFY-TRIGGER-001
+    question: "Compare the stock performance to Microsoft over the last 6 months"
+    category: routing
+    expected_agents: [clarify]
+    expected_dag_shape: single
+    expected_answer_contains: "?"
+    source_tags: []
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      Confirms the planner's CLARIFICATION BOUNDARY sentinel fires on
+      the missing-entity case ("the stock" with no ticker anywhere in
+      the question). Unlike the scope-decline sentinel (see
+      SCOPE-OFFTOPIC-001's convention of leaving expected_agents unset),
+      this question DOES score routing directly against
+      expected_agents: [clarify] — "clarify" is treated as an opaque
+      agent-type string by score_routing() exactly like any real agent
+      name, so this works with zero scorer changes. expected_answer_
+      contains: "?" is a light sanity check that the returned text is
+      actually a question, not empty/malformed sentinel output.
+    retired_date: null
+    retired_reason: null
+
+  - id: CLARIFY-NO-OVERTRIGGER-001
+    question: "How has AAPL's insider trading looked recently?"
+    category: routing
+    expected_agents: [sentiment]
+    expected_dag_shape: single
+    source_tags: [sec_form4]
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      Confirms vague timing ("recently") does NOT incorrectly trigger
+      the new CLARIFICATION BOUNDARY's contradictory-date-range case —
+      should resolve via the existing, older IMPLICIT DATE RESOLUTION
+      defaults (30-day window for "recently") instead of asking the
+      user. Guards against the new sentinel overlapping with or
+      overriding the older, correct default-resolution behavior it was
+      explicitly designed not to duplicate.
+    retired_date: null
+    retired_reason: null
+
+  - id: CLARIFY-NO-OVERTRIGGER-002
+    question: "How's GM stock looking?"
+    category: routing
+    expected_agents: [market]
+    expected_dag_shape: single
+    expected_answer_contains: "General Motors"
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      Confirms ticker/name ambiguity that IS resolvable (GM as literal
+      ticker vs. a plausible generic abbreviation) does not incorrectly
+      trigger the new CLARIFICATION BOUNDARY's missing-entity case —
+      should resolve via the existing entity-resolution-transparency
+      rule (name the resolved company inline) instead of asking the
+      user. Same underlying ambiguity as ENTITY-AMBIG-001, but that
+      question predates the clarify sentinel and was never designed to
+      guard against it specifically — this question exists to close
+      that gap now that the sentinel exists and could plausibly
+      over-fire on exactly this kind of case.
+    retired_date: null
+    retired_reason: null
+
+# ═══════════════════════════════════════════════════════════════════
+# GROUP B — was blocked on extracting pending-clarification logic out
+# of server.py into a shared function; UNBLOCKED 2026-07-07 via
+# clarification.resolve_pending_clarification(), now called by both
+# server.py's /ask handler and run_eval.py's multi-turn runner
+# (_run_setup_turns + run_one_question's multi-turn branch).
+# ═══════════════════════════════════════════════════════════════════
+
+  - id: CLARIFY-MERGE-001
+    question: "AAPL"
+    setup_turns:
+      - question: "Compare the stock performance to Microsoft over the last 6 months"
+    category: grounding
+    expected_agents: [market]
+    expected_answer_contains: "MSFT"
+    forbidden_phrases:
+      - "which stock"
+      - "which company"
+      - "please clarify"
+    source_tags: [yfinance]
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      Tests: setup turn triggers the clarify sentinel (via CLARIFICATION
+      BOUNDARY), scored turn ("AAPL" alone) is classified as answering
+      the pending question and merged into a complete AAPL-vs-MSFT
+      comparison, producing a real answer rather than a second clarify
+      loop or a hallucinated/context-free response to "AAPL" in
+      isolation. UNBLOCKED and directly smoke-tested end to end after
+      extracting clarification.resolve_pending_clarification() as a
+      function shared by server.py and run_eval.py (previously this
+      logic only lived inside server.py's /ask handler, unreachable
+      from this runner path). Confirmed via manual run: setup turn's
+      clarify question was written to PENDING_CLARIFICATION via the new
+      write-side call in _run_setup_turns(); "AAPL" was correctly
+      merged into "Compare Apple (AAPL) stock performance to Microsoft
+      over the last 6 months" — that merged text is what actually drove
+      the planner/agent call, not the bare "AAPL" string; final answer
+      contained a real AAPL vs. MSFT comparison (AAPL +19.2%, MSFT
+      -18.2%); grounding_pass and routing_pass both true against that
+      real answer.
+    retired_date: null
+    retired_reason: null
+
+  - id: CLARIFY-ABANDON-001
+    question: "What's the Fed funds rate right now?"
+    setup_turns:
+      - question: "Compare the stock performance to Apple over the last 6 months"
+    category: grounding
+    expected_agents: [macro]
+    forbidden_phrases:
+      - "Apple"
+      - "AAPL"
+      - "compare"
+    source_tags: [fred]
+    status: active
+    added_date: "2026-07-07"
+    added_reason: >
+      Tests: setup turn triggers a clarify question, scored turn asks
+      something completely unrelated (Fed funds rate) instead of
+      answering it, and the pending clarification should be silently
+      dropped rather than force-merged into a nonsensical combined
+      question. This is the "absence of bad behavior" case flagged as
+      highest-priority in the original eval-coverage notes — most
+      likely to silently regress since nothing fails loudly if it
+      breaks. UNBLOCKED alongside CLARIFY-MERGE-001 via the same
+      resolve_pending_clarification() extraction — both the merge and
+      non-merge (abandon) paths run through the identical shared
+      function, so the same fix that unblocked MERGE unblocks this one
+      too. NOTE: unlike CLARIFY-MERGE-001, this specific question's
+      abandon path has not yet been individually smoke-tested (only the
+      merge case was manually verified end to end) — recommend running
+      it once and eyeballing the result before treating a first pass
+      here as fully trustworthy, same caution as any newly-added
+      question.
+    retired_date: null
+    retired_reason: null
+
+  - id: CLARIFY-STALE-STATE-001
+    question: "How is AAPL doing?"
+    setup_turns:
+      - question: "How is AAPL doing this year?"
+      - question: "What's Apple's biggest risk factor per their 10-K?"
+      - question: "Were there any notable insider trades at AAPL recently?"
+      - question: "What's the Fed funds rate right now?"
+      - question: "How does that compare to a year ago?"
+      - question: "What's AAPL's PE ratio relative to the market?"
+      - question: "Compare the stock performance to Microsoft over the last 6 months"
+    category: routing
+    expected_agents: [market]
+    expected_dag_shape: single
+    source_tags: [yfinance]
+    status: draft
+    added_date: "2026-07-07"
+    added_reason: >
+      PARTIALLY UNBLOCKED — the clarification-mechanism half of this
+      question's original blocker is resolved (the 7th setup turn can
+      now legitimately trigger and record a real pending clarification,
+      same mechanism verified by CLARIFY-MERGE-001/CLARIFY-ABANDON-001).
+      Still blocked on Group C's expected_summary_contains scoring
+      support, since this question's whole point is confirming a
+      session with BOTH a SUMMARY item (from the 6 preceding setup
+      turns, enough to trigger at least one real compression pass) AND
+      a live PENDING_CLARIFICATION item simultaneously doesn't crash or
+      corrupt load_turns()/admin session-detail display — which needs a
+      way to actually inspect that both structures exist and are well-
+      formed, not just that the final scored question's own routing/
+      answer looks normal. Promote once Group C's scoring work lands.
+    retired_date: null
+    retired_reason: null
+
+# ═══════════════════════════════════════════════════════════════════
+# GROUP C — draft, needs one new schema field (expected_summary_contains)
+# and a small new scoring check in run_eval.py's run_one_question().
+# No architecture change needed — memory.load_context() is already
+# public and already returns the structured summary; just needs a new
+# check reading it back and comparing against expected substrings.
+# ═══════════════════════════════════════════════════════════════════
+
+  - id: COMPRESS-001
+    question: "What's the latest price action look like for the company we've been discussing?"
+    setup_turns:
+      - question: "How is AAPL doing this year?"
+      - question: "What's Apple's biggest risk factor per their 10-K?"
+      - question: "Were there any notable insider trades at AAPL recently?"
+      - question: "What's the Fed funds rate right now?"
+      - question: "How does that compare to a year ago?"
+      - question: "What's AAPL's PE ratio relative to the market?"
+    category: routing
+    expected_agents: [market]
+    expected_dag_shape: single
+    expected_answer_contains: "AAPL"
+    expected_summary_contains: ["AAPL"]   # NEW FIELD — not yet scored,
+                                            # see file header for what's needed
+    source_tags: [yfinance]
+    status: draft
+    added_date: "2026-07-07"
+    added_reason: >
+      Needs expected_summary_contains scoring support (see file header)
+      before this is a real test rather than just an unscored extra
+      field. 6 setup turns is deliberately chosen to reliably cross
+      RAW_TURNS_THRESHOLD=8 with margin — save_turn() checks
+      raw_count > 8 after EVERY individual role save (not once per full
+      turn), so compression can fire mid-turn rather than on a clean
+      turn boundary; traced through by hand during runner design: by
+      the 5th setup turn's user-message save, raw_count already exceeds
+      8, so at least one real compression pass is guaranteed well
+      before the 6th setup turn completes, with room to spare. Tests
+      TWO things together: (1) a SUMMARY item exists and its ENTITIES
+      field actually contains AAPL after compression absorbs the
+      oldest turns, and (2) that compressed context still correctly
+      flows into a live agent call (context_note resolving "the company
+      we've been discussing" to AAPL) — proving compression doesn't
+      just store the summary correctly but that it's actually usable
+      downstream, not just inert data sitting in DynamoDB.
+    retired_date: null
+    retired_reason: null
+
+  - id: COMPRESS-002
+    question: "Just to confirm — what have we been tracking so far?"
+    setup_turns:
+      - question: "How is AAPL doing this year?"
+      - question: "What's Apple's biggest risk factor per their 10-K?"
+      - question: "Were there any notable insider trades at AAPL recently?"
+      - question: "What's the Fed funds rate right now?"
+      - question: "How does that compare to a year ago?"
+      - question: "What's AAPL's PE ratio relative to the market?"
+    category: grounding
+    expected_summary_contains: ["ENTITIES", "CONTEXT_NOTE", "CONFIRMED_FACTS"]
+    source_tags: [yfinance]
+    status: draft
+    added_date: "2026-07-07"
+    added_reason: >
+      Needs expected_summary_contains scoring support (see file header).
+      Distinct from COMPRESS-001 — that question checks the compressed
+      summary's CONTENT is correct (AAPL present) and USABLE downstream;
+      this one checks the compressed summary's STRUCTURE is correct —
+      that Haiku's compression call actually followed the exact labeled
+      format _call_haiku_compress()'s system prompt requires (ENTITIES:/
+      TIME_SCOPE:/CONFIRMED_FACTS:/PENDING:/CONTEXT_NOTE:), rather than
+      producing free-form prose that happens to mention the right
+      facts. No expected_agents set deliberately — this question is
+      answerable purely from memory/summary content and isn't testing
+      routing at all (same no-routing-assertion convention as
+      expected_advice_boundary/expected_scope_boundary questions
+      elsewhere in this file). NOTE: if the memory-satisfied planner
+      sentinel discussed and parked this session (see MEM-CLARIFY-001's
+      history) is ever built, this question's expected routing behavior
+      will need revisiting — right now it will likely still route to
+      SOME real agent even though the true answer lives entirely in
+      context, since that short-circuit doesn't exist yet.
+    retired_date: null
+    retired_reason: null

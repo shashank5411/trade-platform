@@ -441,6 +441,62 @@
   .btn-fire:hover { background: var(--accent); color: #fff; }
   .btn-fire:disabled { border-color: var(--border); color: var(--muted); cursor: not-allowed; opacity: 0.5; }
 
+  /* ── Eval runner controls ──────────────────────────────────── */
+  .eval-filter-input {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    border: 1px solid var(--border-hi);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    width: 200px;
+  }
+  .eval-filter-input:focus { outline: none; border-color: var(--accent); }
+
+  .eval-select {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-hi);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .eval-q-list {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    background: var(--surface);
+  }
+
+  .eval-q-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 11px;
+    transition: background 0.1s;
+  }
+  .eval-q-row:last-child { border-bottom: none; }
+  .eval-q-row:hover { background: #f0f4ff; }
+  .eval-q-row input[type=checkbox] { margin-top: 2px; flex-shrink: 0; cursor: pointer; }
+
+  .eval-q-text {
+    font-family: var(--sans);
+    font-size: 10.5px;
+    color: var(--muted);
+    margin-top: 2px;
+    display: block;
+  }
+
   /* ── Sortable columns ───────────────────────────────────── */
   th.sortable {
     cursor: pointer;
@@ -568,7 +624,60 @@
 
   <!-- ── Evals ─────────────────────────────────────────────── -->
   <div class="panel" id="panel-evals">
+
+    <!-- Run Evals control section -->
+    <div class="section-head" style="justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+      <span class="section-title">Run Evals</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <input type="text" id="eval-q-filter" class="eval-filter-input" placeholder="Filter questions…" oninput="renderEvalQuestionList()">
+        <select id="eval-tier-select" class="eval-select" onchange="renderEvalQuestionList()">
+          <option value="all">All tiers</option>
+          <option value="stable">Stable</option>
+          <option value="monitored">Monitored</option>
+        </select>
+        <label style="font-family:var(--mono);font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input type="checkbox" id="eval-include-retired" onchange="renderEvalQuestionList()"> retired
+        </label>
+        <button class="btn-refresh" onclick="toggleAll(true)" style="font-size:10px;padding:2px 8px">All</button>
+        <button class="btn-refresh" onclick="toggleAll(false)" style="font-size:10px;padding:2px 8px">None</button>
+        <button class="btn-fire" id="eval-run-btn" onclick="runSelectedEvals()" disabled>▶ Run Selected (0)</button>
+      </div>
+    </div>
+
+    <div class="eval-q-list" id="eval-q-list">
+      <div class="state-msg">Loading questions…</div>
+    </div>
+
+    <div id="eval-run-status-wrap"></div>
+
+    <!-- Stat cards (latest disk run) -->
     <div id="evals-cards" class="cards"></div>
+
+    <!-- Per-question breakdown of latest run -->
+    <div class="section-head" style="margin-top:8px">
+      <span class="section-title">Latest Run — Per Question</span>
+      <span class="section-count" id="eval-breakdown-count"></span>
+    </div>
+    <div class="tbl-wrap" style="margin-bottom:24px">
+      <table id="eval-breakdown-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Category</th>
+            <th>Pass</th>
+            <th>Routing</th>
+            <th>Tools</th>
+            <th>Grounding</th>
+            <th>Answer preview</th>
+          </tr>
+        </thead>
+        <tbody id="eval-breakdown-body">
+          <tr><td colspan="7" class="state-msg">No run loaded yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Disk run history -->
     <div class="section-head">
       <span class="section-title">Run History</span>
       <span class="section-count" id="evals-count"></span>
@@ -888,6 +997,7 @@ async function loadEvals() {
     }
 
     document.getElementById('evals-count').textContent = `${data.runs.length} runs`;
+    if (latest && latest.run_id) loadLatestRunBreakdown(latest.run_id);
     body.innerHTML = (data.runs || []).map(r => {
       if (r.error) return `<tr><td colspan="8" class="dim">${r.run_id} — ${r.error}</td></tr>`;
       const pct = Math.round((r.pass_rate || 0) * 100);
@@ -913,7 +1023,7 @@ async function loadEvals() {
 
 async function refreshAll() {
   document.getElementById('last-refreshed').textContent = 'Refreshing…';
-  await Promise.all([loadPipeline(), loadSessions(), loadTelemetry(), loadEvals()]);
+  await Promise.all([loadPipeline(), loadSessions(), loadTelemetry(), loadEvals(), loadEvalQuestionPicker()]);
   document.getElementById('last-refreshed').textContent =
     'Updated ' + new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false});
 }
@@ -1004,8 +1114,314 @@ function closeTraceModalDirect() {
   document.getElementById('trace-modal').classList.remove('open');
 }
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModalDirect(); closeTraceModalDirect(); }
+  if (e.key === 'Escape') { closeModalDirect(); closeTraceModalDirect(); closeEvalModalDirect(); }
 });
+
+// ── Eval runner ──────────────────────────────────────────────
+
+let _allEvalQuestions   = [];
+let _evalPollTimer      = null;
+let _evalBreakdownRecords = [];
+
+async function loadEvalQuestionPicker() {
+  try {
+    const data = await fetch('/admin/api/evals/questions').then(r => r.json());
+    _allEvalQuestions = data;
+    renderEvalQuestionList();
+  } catch(e) {
+    document.getElementById('eval-q-list').innerHTML =
+      `<div class="state-msg" style="color:var(--err)">Error loading questions: ${escHtml(e.message)}</div>`;
+  }
+  pollEvalRunStatus();
+}
+
+function renderEvalQuestionList() {
+  const filter  = (document.getElementById('eval-q-filter').value || '').toLowerCase();
+  const tier    = document.getElementById('eval-tier-select').value;
+  const retired = document.getElementById('eval-include-retired').checked;
+
+  let qs = _allEvalQuestions;
+  if (!retired) qs = qs.filter(q => q.status === 'active');
+  if (tier !== 'all') qs = qs.filter(q => (q.tier || 'stable') === tier);
+  if (filter) qs = qs.filter(q =>
+    (q.id || '').toLowerCase().includes(filter) ||
+    (q.question || '').toLowerCase().includes(filter) ||
+    (q.category || '').toLowerCase().includes(filter)
+  );
+
+  const el = document.getElementById('eval-q-list');
+  if (!qs.length) {
+    el.innerHTML = '<div class="state-msg">No questions match filter.</div>';
+    updateRunBtn();
+    return;
+  }
+
+  el.innerHTML = qs.map(q => {
+    const catBadge = `<span class="badge badge-muted" style="margin-left:6px">${q.category}</span>`;
+    const statusBadge = q.status !== 'active'
+      ? `<span class="badge badge-muted" style="margin-left:4px">${q.status}</span>` : '';
+    const tierBadge = q.tier === 'monitored'
+      ? '<span class="badge badge-warn" style="margin-left:4px">monitored</span>' : '';
+    const mtBadge = q.has_setup_turns
+      ? '<span class="badge badge-muted" style="margin-left:4px">multi-turn</span>' : '';
+    const shortQ = (q.question || '').slice(0, 100) + ((q.question || '').length > 100 ? '…' : '');
+    return `<label class="eval-q-row">
+      <input type="checkbox" class="eval-q-cb" data-id="${escHtml(q.id)}" checked onchange="updateRunBtn()">
+      <span>
+        <span style="color:var(--accent);font-weight:600">${escHtml(q.id)}</span>
+        ${catBadge}${statusBadge}${tierBadge}${mtBadge}
+        <span class="eval-q-text">${escHtml(shortQ)}</span>
+      </span>
+    </label>`;
+  }).join('');
+  updateRunBtn();
+}
+
+function updateRunBtn() {
+  const checked = document.querySelectorAll('.eval-q-cb:checked').length;
+  const btn = document.getElementById('eval-run-btn');
+  btn.textContent = `▶ Run Selected (${checked})`;
+  btn.disabled = checked === 0;
+}
+
+function toggleAll(check) {
+  document.querySelectorAll('.eval-q-cb').forEach(cb => { cb.checked = check; });
+  updateRunBtn();
+}
+
+async function runSelectedEvals() {
+  const ids = Array.from(document.querySelectorAll('.eval-q-cb:checked'))
+    .map(cb => cb.dataset.id);
+  if (!ids.length) return;
+
+  const multiCount = ids.filter(id => {
+    const q = _allEvalQuestions.find(q => q.id === id);
+    return q && q.has_setup_turns;
+  }).length;
+
+  let msg = `Run ${ids.length} eval question(s) through the real pipeline?\n\nThis makes real LLM calls.`;
+  if (multiCount > 0)
+    msg += `\n\n${multiCount} question(s) have setup turns — real DynamoDB session writes will occur.`;
+  if (!confirm(msg)) return;
+
+  const tier    = document.getElementById('eval-tier-select').value;
+  const retired = document.getElementById('eval-include-retired').checked;
+
+  try {
+    const resp = await fetch('/admin/api/evals/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ids, tier, include_retired: retired }),
+    }).then(r => r.json());
+
+    if (!resp.ok) { alert(`Error: ${resp.error}`); return; }
+    schedulePollEvalRun(2000);
+  } catch(e) {
+    alert(`Request failed: ${escHtml(e.message)}`);
+  }
+}
+
+function schedulePollEvalRun(delay = 3000) {
+  if (_evalPollTimer) clearTimeout(_evalPollTimer);
+  _evalPollTimer = setTimeout(pollEvalRunStatus, delay);
+}
+
+async function pollEvalRunStatus() {
+  if (_evalPollTimer) { clearTimeout(_evalPollTimer); _evalPollTimer = null; }
+  try {
+    const state = await fetch('/admin/api/evals/status').then(r => r.json());
+    renderEvalRunStatus(state);
+    if (state.status === 'running') {
+      schedulePollEvalRun(3000);
+    } else if (state.status === 'done' && state.run_id) {
+      loadLatestRunBreakdown(state.run_id);
+    }
+  } catch(e) { /* ignore transient poll errors */ }
+}
+
+function renderEvalRunStatus(state) {
+  const el = document.getElementById('eval-run-status-wrap');
+  if (!el || state.status === 'idle') { if (el) el.innerHTML = ''; return; }
+  const colors = { running: 'var(--warn)', done: 'var(--ok)', error: 'var(--err)' };
+  const col = colors[state.status] || 'var(--muted)';
+  const parts = [
+    `<span style="color:${col};font-weight:700">${state.status.toUpperCase()}</span>`,
+    state.run_id ? `<span class="dim">${escHtml(state.run_id)}</span>` : '',
+    state.status === 'running' ? '<span class="dim">Running…</span>' : '',
+    state.error  ? `<span style="color:var(--err)">${escHtml(state.error)}</span>` : '',
+    state.finished_at ? `<span class="dim">Finished ${fmtTime(state.finished_at)}</span>` : '',
+    (state.summary && state.summary.total_questions)
+      ? `<span style="color:${passRateColor(state.summary.total_passed / state.summary.total_questions)}">${state.summary.total_passed}/${state.summary.total_questions} passed</span>`
+      : '',
+  ].filter(Boolean).join('');
+  el.innerHTML = `<div style="padding:10px 14px;margin-bottom:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-family:var(--mono);font-size:11px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">${parts}</div>`;
+}
+
+async function loadLatestRunBreakdown(runId) {
+  const body  = document.getElementById('eval-breakdown-body');
+  const count = document.getElementById('eval-breakdown-count');
+  body.innerHTML = '<tr><td colspan="7" class="state-msg">Loading…</td></tr>';
+  try {
+    const data = await fetch(`/admin/api/evals/${encodeURIComponent(runId)}/records`).then(r => r.json());
+    if (data.error) {
+      body.innerHTML = `<tr><td colspan="7" class="state-msg" style="color:var(--err)">${escHtml(data.error)}</td></tr>`;
+      return;
+    }
+    const records = data.results || [];
+    count.textContent = `${records.length} questions · run ${runId}`;
+    _evalBreakdownRecords = records;
+    renderEvalBreakdown(records);
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="7" class="state-msg" style="color:var(--err)">Error: ${escHtml(e.message)}</td></tr>`;
+  }
+}
+
+function renderEvalBreakdown(records) {
+  const body = document.getElementById('eval-breakdown-body');
+  if (!records.length) {
+    body.innerHTML = '<tr><td colspan="7" class="state-msg">No records.</td></tr>';
+    return;
+  }
+  body.innerHTML = records.map((r, i) => {
+    const passBadge = r.error
+      ? '<span class="badge badge-err">ERROR</span>'
+      : (r.passed ? '<span class="badge badge-ok">PASS</span>' : '<span class="badge badge-err">FAIL</span>');
+    const rb = r.routing_pass       === null || r.routing_pass       === undefined ? '<span class="dim">—</span>' : (r.routing_pass       ? '<span class="badge badge-ok">✓</span>' : '<span class="badge badge-err">✗</span>');
+    const tb = r.tool_selection_pass=== null || r.tool_selection_pass=== undefined ? '<span class="dim">—</span>' : (r.tool_selection_pass ? '<span class="badge badge-ok">✓</span>' : '<span class="badge badge-err">✗</span>');
+    const gb = r.grounding_pass     === null || r.grounding_pass     === undefined ? '<span class="dim">—</span>' : (r.grounding_pass      ? '<span class="badge badge-ok">✓</span>' : '<span class="badge badge-err">✗</span>');
+    const ans = (r.final_answer || '').slice(0, 80);
+    return `<tr onclick="openEvalDetail(${i})" style="cursor:pointer">
+      <td style="font-weight:600;color:var(--accent)">${escHtml(r.question_id || '—')}</td>
+      <td class="dim">${escHtml(r.category || '—')}</td>
+      <td>${passBadge}</td>
+      <td>${rb}</td><td>${tb}</td><td>${gb}</td>
+      <td class="wrap dim">${escHtml(ans)}${(r.final_answer || '').length > 80 ? '…' : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+function openEvalDetail(idx) {
+  const r = _evalBreakdownRecords[idx];
+  if (!r) return;
+  const overlay = document.getElementById('eval-modal');
+  const body    = document.getElementById('eval-modal-body');
+  document.getElementById('eval-modal-title').textContent = r.question_id || '—';
+  overlay.classList.add('open');
+
+  let html = '';
+
+  html += `<div class="detail-section">
+    <div class="detail-label">Question</div>
+    <div class="summary-content">${escHtml(r.question || '—')}</div>
+  </div>`;
+
+  if (r.added_reason) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Added Reason</div>
+      <div class="summary-content" style="font-size:11px;color:var(--muted)">${escHtml(r.added_reason)}</div>
+    </div>`;
+  }
+
+  if (r.setup_turn_records && r.setup_turn_records.length) {
+    const detId = `st-${idx}`;
+    html += `<div class="detail-section">
+      <div class="detail-label" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="var el=document.getElementById('${detId}');el.style.display=el.style.display==='none'?'block':'none'">
+        Setup Turns (${r.setup_turn_records.length}) <span style="font-size:10px;color:var(--accent)">▶ toggle</span>
+      </div>
+      <div id="${detId}" style="display:none">`;
+    r.setup_turn_records.forEach(t => {
+      html += `<div class="turn">
+        <div class="turn-role user">user</div>
+        <div class="turn-content user">${escHtml(t.question || '')}</div>
+        <div class="turn-role assistant" style="margin-top:6px">assistant</div>
+        <div class="turn-content assistant">${escHtml(t.answer || '')}</div>
+      </div>`;
+    });
+    html += '</div></div>';
+  }
+
+  const scorePairs = [
+    ['routing_pass',        'Routing'],
+    ['tool_selection_pass', 'Tool Selection'],
+    ['grounding_pass',      'Grounding'],
+    ['advice_boundary_pass','Advice Boundary'],
+    ['scope_boundary_pass', 'Scope Boundary'],
+    ['trajectory_pass',     'Trajectory'],
+    ['injection_pass',      'Injection'],
+  ].filter(([k]) => r[k] !== null && r[k] !== undefined);
+
+  if (scorePairs.length) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Scores</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;font-family:var(--mono);font-size:11px">
+        ${scorePairs.map(([k, label]) =>
+          `<span class="badge ${r[k] ? 'badge-ok' : 'badge-err'}">${label}: ${r[k] ? 'PASS' : 'FAIL'}</span>`
+        ).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (r.routing_reasons && r.routing_reasons.length) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Routing Reasons</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.7">
+        ${r.routing_reasons.map(s => `<div>• ${escHtml(s)}</div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (r.actual_agents && r.actual_agents.length) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Agents Used</div>
+      <div style="font-family:var(--mono);font-size:11px">${r.actual_agents.map(escHtml).join(', ')}</div>
+    </div>`;
+  }
+
+  if (r.actual_tools_by_agent && Object.keys(r.actual_tools_by_agent).length) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Tools Called</div>
+      <div style="font-family:var(--mono);font-size:11px;line-height:1.8">
+        ${Object.entries(r.actual_tools_by_agent).map(([ag, tools]) =>
+          `<div><span style="color:var(--accent)">${escHtml(ag)}</span>: ${escHtml((tools||[]).join(', '))}</div>`
+        ).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (r.total_input_tokens || r.total_output_tokens) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Tokens / Cost / Latency</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        ${(r.total_input_tokens||0).toLocaleString()} in / ${(r.total_output_tokens||0).toLocaleString()} out
+        — est. $${(r.estimated_cost_usd||0).toFixed(5)}
+        ${r.latency_ms ? `· ${(r.latency_ms/1000).toFixed(1)}s` : ''}
+      </div>
+    </div>`;
+  }
+
+  if (r.final_answer) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Final Answer</div>
+      <div class="summary-content">${escHtml(r.final_answer)}</div>
+    </div>`;
+  }
+
+  if (r.error) {
+    html += `<div class="detail-section">
+      <div class="detail-label" style="color:var(--err)">Error</div>
+      <div class="summary-content" style="border-color:var(--err)">${escHtml(r.error)}</div>
+    </div>`;
+  }
+
+  body.innerHTML = html || '<div class="state-msg">No detail available.</div>';
+}
+
+function closeEvalModal(e) {
+  if (e.target === document.getElementById('eval-modal')) closeEvalModalDirect();
+}
+function closeEvalModalDirect() {
+  document.getElementById('eval-modal').classList.remove('open');
+}
 
 
 // ── Generic table sort ───────────────────────────────────────
@@ -1074,6 +1490,22 @@ function sortTable(tableId, colIndex, type = 'str') {
     </div>
     <div class="modal-body" id="trace-modal-body">
       <div class="state-msg">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Eval Question Detail Modal ──────────────────────────── -->
+<div class="modal-overlay" id="eval-modal" onclick="closeEvalModal(event)">
+  <div class="modal" style="max-width:960px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Eval Question Detail</div>
+        <div class="modal-sid" id="eval-modal-title">—</div>
+      </div>
+      <button class="modal-close" onclick="closeEvalModalDirect()">✕</button>
+    </div>
+    <div class="modal-body" id="eval-modal-body">
+      <div class="state-msg">Select a question from the breakdown table.</div>
     </div>
   </div>
 </div>
