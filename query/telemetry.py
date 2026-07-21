@@ -18,11 +18,23 @@ Schema (one JSON file per agent run):
   reflexion_triggered BOOLEAN
   reflexion_passed    BOOLEAN
   had_dedup_hits   BOOLEAN
-  attribution_warnings ARRAY  warning strings from dag_executor's
-                              unattributed-figure heuristic (empty for
-                              normal per-agent traces; populated only on
-                              the synthetic per-round trace dag_executor
-                              writes when warnings fire)
+  attribution_failures ARRAY  structured failure dicts from dag_executor's
+                              check_attribution() ({kind, value, raw_text,
+                              reason}) — set only on the synthetic
+                              dag_executor trace written after the
+                              synthesis-tail grounding gate runs. Blocking:
+                              a non-empty list means the grounding gate
+                              failed on this dimension.
+  inversion_failures   ARRAY  structured failure dicts from dag_executor's
+                              check_inversion() ({kind, value, raw_text,
+                              node_id, tool, reason}) — same trace as
+                              attribution_failures. NOT currently blocking
+                              (see dag_executor.py's INVERSION_BLOCKING) —
+                              populated for telemetry/eval even when the
+                              gate otherwise passed.
+  grounding_gate_passed BOOLEAN  the merged deterministic gate's overall
+                              passed value (attribution-only while
+                              INVERSION_BLOCKING is False)
   synthesis_reflexion_triggered BOOLEAN  set only on the synthetic
                               dag_executor trace written after the
                               synthesis-level critic pass
@@ -96,7 +108,9 @@ class Trace:
         self.reflexion_passed    = True
         self.had_dedup_hits      = False
         self.answer_preview      = ""
-        self.attribution_warnings = []
+        self.attribution_failures = []
+        self.inversion_failures   = []
+        self.grounding_gate_passed = True
         self.synthesis_reflexion_triggered = False
         self.synthesis_reflexion_passed    = True
         self.planner_parse_failure_raw_output  = None
@@ -143,11 +157,19 @@ class Trace:
     def record_answer(self, answer: str):
         self.answer_preview = answer[:500]
 
-    def record_attribution_warnings(self, warnings: list):
-        """Attach attribution-check warnings (see dag_executor.py's
-        _check_unattributed_figures) so they're queryable via Athena
-        alongside the rest of the trace, not just printed to console."""
-        self.attribution_warnings = warnings
+    def record_grounding_check(self, gate_result: dict):
+        """Attach the merged deterministic grounding gate's result (see
+        dag_executor.py's check_attribution()/check_inversion()/
+        _run_grounding_gate()) so both failure lists and the overall
+        passed value are queryable via Athena alongside the rest of the
+        trace, not just printed to console. Called once per synthesis
+        attempt (initial, and again after a retry if one happened) —
+        each call overwrites the previous, so only the FINAL determining
+        attempt's result is what's queryable, mirroring
+        record_synthesis_reflexion()'s final-state-only convention."""
+        self.attribution_failures  = gate_result.get("attribution_failures", [])
+        self.inversion_failures    = gate_result.get("inversion_failures", [])
+        self.grounding_gate_passed = gate_result.get("passed", True)
 
     def record_synthesis_reflexion(self, triggered: bool, passed: bool):
         """Record whether synthesis-level reflexion fired and its outcome."""
@@ -199,7 +221,9 @@ class Trace:
             "reflexion_passed":    self.reflexion_passed,
             "had_dedup_hits":      self.had_dedup_hits,
             "answer_preview":      self.answer_preview,
-            "attribution_warnings": self.attribution_warnings,
+            "attribution_failures": self.attribution_failures,
+            "inversion_failures":   self.inversion_failures,
+            "grounding_gate_passed": self.grounding_gate_passed,
             "synthesis_reflexion_triggered": self.synthesis_reflexion_triggered,
             "synthesis_reflexion_passed":    self.synthesis_reflexion_passed,
             "planner_parse_failure_raw_output":  self.planner_parse_failure_raw_output,

@@ -9,7 +9,6 @@ Takes a DAG plan from the planner and executes it:
 """
 
 import os
-import re
 import asyncio
 import anthropic
 
@@ -20,6 +19,8 @@ from query.telemetry import Trace
 from query.reflexion import (
     critique_synthesis, CAVEAT, _needs_reflexion_despite_length,
     check_injection_provenance, INJECTION_CAVEAT,
+    check_attribution, check_inversion, _run_grounding_gate,
+    _build_retry_guidance,
 )
 from query.sub_agents import _strip_correction_preamble
 
@@ -107,6 +108,7 @@ async def _run_agent_async(
     history:    list,
     verbose:    bool,
     session_id: str = None,
+    upstream_tool_calls: dict = None,
 ) -> tuple:
     """Run a single DAG node in a thread pool (non-blocking).
 
@@ -115,6 +117,15 @@ async def _run_agent_async(
     (e.g. "market"). The same agent_type can run under multiple node_ids
     in one DAG when a question needs the same specialist twice with
     different upstream context (see planner.py's multi-hop chain rules).
+
+    upstream_tool_calls: dict[dep_node_id -> list[tool-call record]] for
+    this node's DIRECT dependencies (empty/None for a node with no
+    depends_on). Threaded through to apply_reflexion() so a dependent
+    node's own grounding gate can recognize a figure it was told to (and
+    did) cite via the "[from prior step: ...]" bracket format as grounded
+    — see GROUNDING_CHECKS_IMPLEMENTATION.md's "dependent-node attribution"
+    section for why this exists and FLOW_REFERENCE.md §5 for the bug this
+    fixes.
     """
     agent = get_agent(agent_type)
     if not agent:
@@ -130,6 +141,7 @@ async def _run_agent_async(
                 verbose=verbose,
                 session_id=session_id,
                 node_id=node_id,
+                upstream_tool_calls=upstream_tool_calls,
             )
         )
         return node_id, answer, tools_called
@@ -137,33 +149,138 @@ async def _run_agent_async(
         return node_id, f"Node '{node_id}' (agent '{agent_type}') failed: {e}", []
 
 
-_FIGURE_PATTERN = re.compile(r'(\$\s?\d[\d,]*\.?\d*|\d+(?:\.\d+)?%|\b\d+\.\d+\b)')
+# TEMPORARY — manual eyeball aid for validating check_attribution()/
+# check_inversion() against real queries before trusting the telemetry
+# pipeline alone (S3/Athena has a write-then-query lag; this is immediate).
+# Remove once the grounding gate's behavior has been spot-checked against
+# a handful of real runs — this duplicates what synth_trace.attribution_failures
+# / .inversion_failures / .grounding_gate_passed already carry once flushed.
+def _debug_print_grounding_gate(phase: str, gate: dict) -> None:
+    print(f"\n[GroundingGate:{phase}] passed={gate['passed']} "
+          f"(attribution_passed={gate['attribution_passed']}, "
+          f"inversion_passed={gate['inversion_passed']})")
+    if gate["attribution_failures"]:
+        print(f"  attribution_failures ({len(gate['attribution_failures'])}):")
+        for f in gate["attribution_failures"]:
+            print(f"    - {f['raw_text']!r} (value={f['value']}) — {f['reason']}")
+    if gate["inversion_failures"]:
+        print(f"  inversion_failures ({len(gate['inversion_failures'])}) [non-blocking]:")
+        for f in gate["inversion_failures"]:
+            print(f"    - {f['raw_text']!r} (value={f['value']}, "
+                  f"node={f['node_id']}, tool={f['tool']}) — {f['reason']}")
 
 
-def _check_unattributed_figures(node_outputs: dict, dag: dict) -> list:
+async def _resolve_synthesis(
+    question:           str,
+    agent_outputs:       str,
+    synthesis_prompt:    str,
+    synthesized_answer:  str,
+    node_tool_calls:     dict,
+    session_id:          str,
+    verbose:             bool,
+) -> tuple:
     """
-    Soft heuristic: for every node with non-empty depends_on, flag if its
-    answer contains a numeric figure (%, $, or decimal number) but no
-    '[from prior step:' bracket anywhere in the text. This does not prove
-    the node restated upstream data uncited — a node can legitimately have
-    its own freshly-fetched figures and nothing borrowed to attribute — so
-    treat every entry returned here as a warning to review, not a defect.
+    Runs the merged grounding gate (deterministic check_attribution() /
+    check_inversion() + the existing LLM critique_synthesis()) against a
+    synthesized answer, retries synthesis once on failure, and appends
+    CAVEAT if the retry still fails. This is the exact retry-cap/caveat
+    control flow that previously lived inline in execute() — extracted
+    unchanged so it's unit-testable (mock client.messages.create() and
+    critique_synthesis()) without needing a full DAG round to produce
+    its inputs.
+
+    Gate semantics: overall_passed = critique_passed AND attribution_passed
+    (AND inversion_passed, only once INVERSION_BLOCKING is True — see
+    dag_executor.py's module-level flag). The word-count skip gate
+    (SYNTH_REFLEXION_MIN_WORDS) only ever governs whether the LLM
+    critique_synthesis() call fires — it does NOT skip the deterministic
+    grounding gate, which is cheap (no LLM call) and always runs.
+
+    Returns (final_answer: str, synth_trace: Trace). Caller is responsible
+    for running the injection check against final_answer and flushing
+    synth_trace (both happen on the SAME trace object returned here, per
+    the established one-trace-per-synthesis-tail pattern).
     """
-    warnings = []
-    for node_id, node in dag.items():
-        if not node.get("depends_on"):
-            continue
-        answer = node_outputs.get(node_id, "")
-        if not answer or "[from prior step:" in answer:
-            continue
-        if _FIGURE_PATTERN.search(answer):
-            warnings.append(
-                f"node '{node_id}' (depends_on {node['depends_on']}) "
-                f"contains numeric figures but no '[from prior step:' "
-                f"attribution bracket — verify it isn't silently "
-                f"restating upstream data as its own."
-            )
-    return warnings
+    synth_word_count = len(synthesized_answer.split())
+    synth_forced = _needs_reflexion_despite_length(synthesized_answer)
+    skip_llm_critique = synth_word_count < SYNTH_REFLEXION_MIN_WORDS and not synth_forced
+
+    synth_trace = Trace(
+        session_id=session_id or "no-session",
+        agent="dag_executor",
+        question=question,
+        model=SYNTH_MODEL,
+    )
+
+    # Deterministic grounding gate — no LLM call, so unlike critique_synthesis()
+    # it is never word-count-gated; it always runs against whatever answer
+    # is currently being evaluated.
+    grounding_gate = await _run_grounding_gate(synthesized_answer, node_tool_calls)
+    synth_trace.record_grounding_check(grounding_gate)
+    if verbose:
+        _debug_print_grounding_gate("initial", grounding_gate)
+
+    if skip_llm_critique:
+        if verbose:
+            print(f"[Executor] Synthesis LLM critique skipped — under "
+                  f"{SYNTH_REFLEXION_MIN_WORDS} words")
+        critique_result = {"passed": True, "issues": []}
+    else:
+        if synth_forced and verbose:
+            print(f"[Executor] Synthesis reflexion running despite "
+                  f"{synth_word_count} words — multiple figures + "
+                  f"derived/comparative language detected")
+        critique_result = critique_synthesis(
+            question, agent_outputs, synthesized_answer, verbose
+        )
+
+    overall_passed = critique_result.get("passed", True) and grounding_gate["passed"]
+
+    if overall_passed:
+        if verbose:
+            print("[Executor] Synthesis reflexion passed")
+        synth_trace.record_synthesis_reflexion(triggered=False, passed=True)
+        return synthesized_answer, synth_trace
+
+    if verbose:
+        print("[Executor] Synthesis reflexion failed — retrying")
+    guidance = _build_retry_guidance(critique_result, grounding_gate)
+    retry_prompt = (
+        synthesis_prompt
+        + f"\n\n[INTERNAL CORRECTION NOTE — do not reference, "
+        f"acknowledge, or respond to this note in your answer:\n{guidance}]\n\n"
+        f"Produce the corrected synthesis directly. Do not apologize, "
+        f"mention a previous attempt, or acknowledge any correction."
+    )
+    retry_response = client.messages.create(
+        model=SYNTH_MODEL,
+        max_tokens=2000,
+        system=SYNTHESIS_SYSTEM,
+        messages=[{"role": "user", "content": retry_prompt}],
+    )
+    retry_answer = retry_response.content[0].text
+    retry_answer = _strip_correction_preamble(retry_answer)
+
+    retry_critique = critique_synthesis(
+        question, agent_outputs, retry_answer, verbose
+    )
+    retry_gate = await _run_grounding_gate(retry_answer, node_tool_calls)
+    synth_trace.record_grounding_check(retry_gate)
+    if verbose:
+        _debug_print_grounding_gate("retry", retry_gate)
+
+    retry_passed = retry_critique.get("passed", True) and retry_gate["passed"]
+
+    if retry_passed:
+        if verbose:
+            print("[Executor] Synthesis reflexion retry passed")
+        synth_trace.record_synthesis_reflexion(triggered=True, passed=True)
+        return retry_answer, synth_trace
+
+    if verbose:
+        print("[Executor] Synthesis reflexion retry still failing — adding caveat")
+    synth_trace.record_synthesis_reflexion(triggered=True, passed=False)
+    return retry_answer + CAVEAT, synth_trace
 
 
 def _run_injection_check(
@@ -321,6 +438,21 @@ async def execute(
                 for dep in node.get("depends_on", [])
                 if dep in completed
             ]
+            # Structured analogue of dep_answers (which is only the
+            # formatted PROMPT STRING) — the underlying tool-call records
+            # for each direct dependency, still accessible here since
+            # node_tool_calls is populated for every prior round before
+            # this round's prompts are built. Passed through so the
+            # dependent node's OWN grounding gate can recognize a figure
+            # it was told to (and does) cite via the MANDATORY CITATION
+            # FORMAT below as grounded, instead of only ever seeing its
+            # own fetched data — see GROUNDING_CHECKS_IMPLEMENTATION.md's
+            # "dependent-node attribution" section.
+            upstream_tool_calls = {
+                dep: node_tool_calls[dep]
+                for dep in node.get("depends_on", [])
+                if dep in node_tool_calls
+            }
             if dep_answers:
                 # Sequential agent: enrich with prior outputs.
                 # IMPORTANT: this prior analysis was verified by a DIFFERENT
@@ -359,7 +491,10 @@ async def execute(
                 )
             else:
                 enriched = question
-            tasks.append(_run_agent_async(node_id, agent_type, enriched, history, verbose, session_id))
+            tasks.append(_run_agent_async(
+                node_id, agent_type, enriched, history, verbose, session_id,
+                upstream_tool_calls=upstream_tool_calls,
+            ))
 
         results = await asyncio.gather(*tasks)
         for node_id, answer, tools_called in results:
@@ -371,20 +506,6 @@ async def execute(
                       f"[Executor] --- end {node_id} ---")
 
         round_num += 1
-
-    attribution_warnings = _check_unattributed_figures(completed, dag)
-    if attribution_warnings:
-        if verbose:
-            for w in attribution_warnings:
-                print(f"[Executor] ⚠️  ATTRIBUTION WARNING: {w}")
-        warn_trace = Trace(
-            session_id=session_id or "no-session",
-            agent="dag_executor",
-            question=question,
-            model="n/a",
-        )
-        warn_trace.record_attribution_warnings(attribution_warnings)
-        warn_trace.flush()
 
     if verbose:
         print(f"\n[Executor] Synthesizing {len(completed)} agent outputs...")
@@ -452,73 +573,15 @@ async def execute(
     # otherwise skip, which would defeat the point of the check (confirmed
     # via testing on a real 141-word clean answer that never reached this
     # gate at all).
-    synth_word_count = len(synthesized_answer.split())
-    synth_forced = _needs_reflexion_despite_length(synthesized_answer)
-    skip_grounding_check = synth_word_count < SYNTH_REFLEXION_MIN_WORDS and not synth_forced
-
-    synth_trace = Trace(
-        session_id=session_id or "no-session",
-        agent="dag_executor",
+    final_answer, synth_trace = await _resolve_synthesis(
         question=question,
-        model=SYNTH_MODEL,
+        agent_outputs=agent_outputs,
+        synthesis_prompt=synthesis_prompt,
+        synthesized_answer=synthesized_answer,
+        node_tool_calls=node_tool_calls,
+        session_id=session_id,
+        verbose=verbose,
     )
-
-    if skip_grounding_check:
-        if verbose:
-            print(f"[Executor] Synthesis reflexion skipped — under "
-                  f"{SYNTH_REFLEXION_MIN_WORDS} words")
-        final_answer = synthesized_answer
-    else:
-        if synth_forced and verbose:
-            print(f"[Executor] Synthesis reflexion running despite "
-                  f"{synth_word_count} words — multiple figures + "
-                  f"derived/comparative language detected")
-
-        synth_critique = critique_synthesis(
-            question, agent_outputs, synthesized_answer, verbose
-        )
-
-        if synth_critique.get("passed", True):
-            if verbose:
-                print("[Executor] Synthesis reflexion passed")
-            synth_trace.record_synthesis_reflexion(triggered=False, passed=True)
-            final_answer = synthesized_answer
-        else:
-            if verbose:
-                print(f"[Executor] Synthesis reflexion failed — retrying")
-            guidance = synth_critique.get(
-                "retry_guidance", "Only state facts present in agent outputs."
-            )
-            retry_prompt = (
-                synthesis_prompt
-                + f"\n\n[INTERNAL CORRECTION NOTE — do not reference, "
-                f"acknowledge, or respond to this note in your answer: "
-                f"{guidance}]\n\n"
-                f"Produce the corrected synthesis directly. Do not apologize, "
-                f"mention a previous attempt, or acknowledge any correction."
-            )
-            retry_response = client.messages.create(
-                model=SYNTH_MODEL,
-                max_tokens=2000,
-                system=SYNTHESIS_SYSTEM,
-                messages=[{"role": "user", "content": retry_prompt}],
-            )
-            retry_answer = retry_response.content[0].text
-            retry_answer = _strip_correction_preamble(retry_answer)
-            retry_critique = critique_synthesis(
-                question, agent_outputs, retry_answer, verbose
-            )
-
-            if retry_critique.get("passed", True):
-                if verbose:
-                    print("[Executor] Synthesis reflexion retry passed")
-                synth_trace.record_synthesis_reflexion(triggered=True, passed=True)
-                final_answer = retry_answer
-            else:
-                if verbose:
-                    print("[Executor] Synthesis reflexion retry still failing — adding caveat")
-                synth_trace.record_synthesis_reflexion(triggered=True, passed=False)
-                final_answer = retry_answer + CAVEAT
 
     # Injection-provenance check — independent of critique_synthesis()'s
     # grounding/fabrication check above (and unconditional regardless of

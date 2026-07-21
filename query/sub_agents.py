@@ -478,6 +478,7 @@ def _run_agent(
     token_budget: int  = 50_000,
     max_iter:     int  = 8,
     node_id:      str  = None,
+    upstream_tool_calls: dict = None,
 ) -> tuple:
     """Shared ReAct loop with guardrails, telemetry, and reflexion.
 
@@ -486,6 +487,13 @@ def _run_agent(
     different upstream context). Defaults to None for any caller that
     doesn't pass one (e.g. direct agent.run() calls outside the DAG
     executor, or older code paths) — Trace handles None gracefully.
+
+    upstream_tool_calls: dict[dep_node_id -> list[tool-call record]] for
+    this node's direct DAG dependencies, if any (dag_executor.py's round
+    loop builds this). Threaded straight through to apply_reflexion() —
+    see that function's docstring for what it does with it. None/empty for
+    a node with no depends_on (single-agent DAGs, or a node running in
+    flat parallel with no upstream context).
     """
     messages = list(history or [])
     messages.append({"role": "user", "content": question})
@@ -799,6 +807,8 @@ def _run_agent(
         retry_fn=retry_fn,
         trace=trace,
         verbose=verbose,
+        node_id=node_id,
+        upstream_tool_calls=upstream_tool_calls,
     )
 
     answer = re.sub(r'\[INTERNAL CORRECTION NOTE.*?\]', '', answer, flags=re.DOTALL)
@@ -863,11 +873,11 @@ class MarketAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> tuple:
+            node_id: str = None, upstream_tool_calls: dict = None) -> tuple:
         return _run_agent(question, MARKET_SYSTEM, MARKET_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,
-                          node_id=node_id)
+                          node_id=node_id, upstream_tool_calls=upstream_tool_calls)
 
 
 class MacroAgent:
@@ -877,11 +887,11 @@ class MacroAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> tuple:
+            node_id: str = None, upstream_tool_calls: dict = None) -> tuple:
         return _run_agent(question, MACRO_SYSTEM, MACRO_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,
-                          node_id=node_id)
+                          node_id=node_id, upstream_tool_calls=upstream_tool_calls)
 
 
 class FilingsAgent:
@@ -891,11 +901,11 @@ class FilingsAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> tuple:
+            node_id: str = None, upstream_tool_calls: dict = None) -> tuple:
         return _run_agent(question, FILINGS_SYSTEM, FILINGS_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,
-                          node_id=node_id)
+                          node_id=node_id, upstream_tool_calls=upstream_tool_calls)
 
 SENTIMENT_SYSTEM = f"""Today's date is {datetime.date.today().isoformat()}. News and insider trade data is available from 2020-01-01 to present. Any date before today and after 2020-01-01 is valid historical data — do not reject it as future or unavailable. If a query returns empty results for a recent date, fetch the data and report what is available rather than assuming the date is invalid.
 
@@ -1076,11 +1086,11 @@ class SentimentAgent:
 
     def run(self, question: str, history: list = None,
             verbose: bool = True, session_id: str = None,
-            node_id: str = None) -> tuple:
+            node_id: str = None, upstream_tool_calls: dict = None) -> tuple:
         return _run_agent(question, SENTIMENT_SYSTEM, SENTIMENT_TOOLS,
                           history, verbose, self.name, session_id,
                           self.TOKEN_BUDGET, self.MAX_ITER,
-                          node_id=node_id)
+                          node_id=node_id, upstream_tool_calls=upstream_tool_calls)
 
 
 market_agent    = MarketAgent()
