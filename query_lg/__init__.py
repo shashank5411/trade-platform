@@ -1,0 +1,1 @@
+from query_lg.graph import compiled_graph
