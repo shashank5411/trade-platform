@@ -131,6 +131,20 @@ async def chat_session(session_id: str):
 # session notes) so this never collides with V1's own session rows in
 # the same table.
 
+def _truncate_turn(text: str, limit: int = 600) -> str:
+    """Truncate at a line boundary, not mid-character, so a partial
+    markdown table row doesn't get handed to the model as if it were
+    complete. 600 chars (up from 200) is enough to reliably carry a
+    comparison table's data rows, not just its title."""
+    if len(text) <= limit:
+        return text
+    truncated = text[:limit]
+    last_newline = truncated.rfind("\n")
+    if last_newline > 0:
+        truncated = truncated[:last_newline]
+    return truncated + "\n...[truncated]"
+
+
 def _format_memory_context(context: dict) -> str:
     parts = []
     if context.get("summary"):
@@ -138,7 +152,7 @@ def _format_memory_context(context: dict) -> str:
     recent = context.get("recent_turns") or []
     if recent:
         recent_text = "\n".join(
-            f"{t['role'].upper()}: {str(t['content'])[:200]}" for t in recent[-4:]
+            f"{t['role'].upper()}: {_truncate_turn(str(t['content']))}" for t in recent[-4:]
         )
         parts.append(f"Conversation context:\n{recent_text}")
     return "\n\n".join(parts)
