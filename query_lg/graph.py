@@ -47,6 +47,43 @@ def dispatch_node(state: GraphState) -> dict:
     return {}
 
 
+def _enriched_agent_question(state: GraphState, nid: str) -> str:
+    """Agent nodes previously received ONLY state.question — no memory,
+    no planner reasoning. This meant a planner that correctly resolved
+    "4 months ago" to AAPL (using memory_context) would still hand the
+    agent a bare "what was it 4 months ago?" with zero ticker info, so
+    the agent had nothing to call a tool with and answered in prose
+    instead, which then failed the grounding gate (no tool calls to
+    ground against). Folding memory_context + the planner's OWN
+    reasoning for this specific node back into what the agent sees
+    closes that gap without duplicating any planner logic.
+
+    REGRESSION FOUND AND FIXED IN THIS VERSION: an earlier version of
+    this function passed the raw memory_context (which can contain
+    actual figures from a prior turn's answer) with no framing — the
+    agent sometimes reused an old number from that text instead of
+    calling a tool for the NEW question, since the figure was just
+    sitting there in context. The explicit "for identifying WHICH
+    entity only, never reuse figures from it" instruction below is
+    required, not decorative — without it, the grounding gate correctly
+    catches the ungrounded answer, but the resulting retry has no tool
+    calls to work with either (the draft never made any), so the retry
+    just reports it can't revise — which is what you saw."""
+    spec = state.dag[nid]
+    parts = []
+    if state.memory_context:
+        parts.append(
+            "Prior conversation context (for identifying WHICH entity/"
+            "ticker/timeframe this question refers to ONLY — do NOT reuse "
+            "any prices, figures, or data points from this text; always "
+            "call your tools fresh to get current, verified data for the "
+            "question below):\n" + state.memory_context
+        )
+    if spec.reason:
+        parts.append(f"Planner routing note: {spec.reason}")
+    parts.append(f"Question: {state.question}")
+    return "\n\n".join(parts)
+
 def route_after_dispatch(state: GraphState) -> list[Send] | Literal["synthesis"]:
     done = set(state.node_results.keys())
     remaining = {
@@ -59,10 +96,13 @@ def route_after_dispatch(state: GraphState) -> list[Send] | Literal["synthesis"]
         return "synthesis"
 
     return [
-        Send("agent_node", {"node_id": nid, "agent_type": state.dag[nid].agent, "question": state.question})
+        Send("agent_node", {
+            "node_id": nid,
+            "agent_type": state.dag[nid].agent,
+            "question": _enriched_agent_question(state, nid),
+        })
         for nid in ready
     ]
-
 
 async def agent_node(payload: dict, config: Optional[RunnableConfig] = None) -> dict:
     node_id = payload["node_id"]
@@ -157,17 +197,34 @@ builder.add_edge("synthesis", "synthesis_reflexion")
 builder.add_edge("synthesis_reflexion", "injection_check")
 builder.add_edge("injection_check", END)
 
-compiled_graph = builder.compile(
-    checkpointer=MemorySaver(
-        serde=JsonPlusSerializer(
-            allowed_msgpack_modules=[
-                ("query_lg.state", "DagNodeSpec"),
-                ("query_lg.state", "DraftAnswer"),
-                ("query_lg.state", "NodeResult"),
-                ("query_lg.state", "ToolCallRecord"),
-                ("query_lg.state", "GroundingGateResult"),
-                ("query_lg.state", "CritiqueResult"),
-            ],
-        )
-    )
+# Shared serde — reused by BOTH the default in-memory checkpointer below
+# AND server.py's persistent AsyncSqliteSaver, so a state round-tripped
+# through SQLite deserializes with the exact same allowed-module set as
+# the in-memory/CLI path. Keeping this in one place means a future new
+# nested Pydantic model only needs registering once.
+CHECKPOINT_SERDE = JsonPlusSerializer(
+    allowed_msgpack_modules=[
+        ("query_lg.state", "DagNodeSpec"),
+        ("query_lg.state", "DraftAnswer"),
+        ("query_lg.state", "NodeResult"),
+        ("query_lg.state", "ToolCallRecord"),
+        ("query_lg.state", "GroundingGateResult"),
+        ("query_lg.state", "CritiqueResult"),
+    ],
 )
+
+
+def compile_graph(checkpointer=None):
+    """Compile the graph with a given checkpointer.
+
+    Defaults to an in-memory MemorySaver when no checkpointer is passed
+    — fine for ask.py/CLI/tests (single process, short-lived, restart
+    losing state is a non-issue). server.py does NOT use this default:
+    it builds its own graph with a persistent AsyncSqliteSaver at
+    startup, since MemorySaver would lose every paused clarify() the
+    instant the process restarts.
+    """
+    return builder.compile(checkpointer=checkpointer or MemorySaver(serde=CHECKPOINT_SERDE))
+
+
+compiled_graph = compile_graph()

@@ -57,14 +57,28 @@ ROUTING RULES:
    DIFFERENT data (e.g. two DIFFERENT date ranges, or one depends on the
    other's output) — never when one multi-entity call already covers
    every entity the question asks about.
+BEFORE deciding anything is "missing": if a <session_memory> block or
+Conversation context is provided above the question, check it FIRST.
+Follow-up phrasing like "now compare with X", "what about Y", "and
+NVIDIA?" almost always means: reuse whatever tickers/entities/timeframe
+were established in that prior context, substituting or adding the new
+one the user just named. E.g. if the prior turn compared AAPL vs MSFT
+over the last 3 months and the new question is "compare with NVIDIA
+now" — that means AAPL, MSFT, AND NVDA, same 3-month window, NOT a
+request missing a comparison target. Only fall through to the clarify
+sentinel below if the missing piece genuinely isn't recoverable from
+EITHER the question OR the provided context.
 
 SENTINELS — use ONLY when they apply, never as a default:
-- clarify: the question is missing information you genuinely need (e.g.
-  "compare the stock to Microsoft" with no ticker/company named for "the
-  stock"). Set sentinel="clarify" and sentinel_reason to the SPECIFIC
-  missing piece, phrased as a question to the user. This is about
-  MISSING INFORMATION IN THE QUESTION, never about a date being recent
-  or a data point you personally don't know.
+- clarify: the question is missing information you genuinely need AND
+  that information isn't recoverable from session_memory/conversation
+  context either (e.g. "compare the stock to Microsoft" with no
+  ticker/company named for "the stock", asked as the very FIRST message
+  in a session with no prior context to resolve it from). Set
+  sentinel="clarify" and sentinel_reason to the SPECIFIC missing piece,
+  phrased as a question to the user. This is about MISSING INFORMATION
+  IN THE QUESTION (and unrecoverable from context), never about a date
+  being recent or a data point you personally don't know.
 - decline: the question has ZERO financial/market/economic component —
   e.g. pure arithmetic, general trivia, unrelated topics. This is a
   TOPIC/DOMAIN check only. A well-formed financial question about a
@@ -92,9 +106,15 @@ async def planner_node(state, config: Optional[RunnableConfig] = None) -> dict:
     model = resolve_model(config)
     today = date.today().isoformat()
     system_prompt = PLANNER_SYSTEM_TEMPLATE.format(today=today)
+
+    human_content = (
+        f"{state.memory_context}\n\nNew question: {state.question}"
+        if state.memory_context else state.question
+    )
+
     response = await model.ainvoke([
         SystemMessage(content=system_prompt),
-        HumanMessage(content=state.question),
+        HumanMessage(content=human_content),
     ])
     text = response.content.strip().replace("```json", "").replace("```", "").strip()
 

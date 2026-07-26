@@ -1,0 +1,24 @@
+# query_lg (LangGraph implementation) — runs alongside the root Dockerfile's
+# V1 image on the same EC2 instance, different port. Needs BOTH query/ and
+# query_lg/ copied in: query_lg/tools.py imports query.api directly.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY query/requirements.txt query/requirements.txt
+RUN pip install --no-cache-dir -r query/requirements.txt
+
+COPY query_lg/requirements.txt query_lg/requirements.txt
+RUN pip install --no-cache-dir -r query_lg/requirements.txt
+
+COPY query/ query/
+COPY query_lg/ query_lg/
+
+EXPOSE 8001
+
+# --workers 1 is required, not a default left unset: the AsyncSqliteSaver
+# checkpointer holds one long-lived sqlite connection opened at startup
+# (see query_lg/server.py's lifespan) — multiple worker processes would
+# each open their own connection against the same file and can corrupt
+# interrupt/resume state across workers.
+CMD ["uvicorn", "query_lg.server:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

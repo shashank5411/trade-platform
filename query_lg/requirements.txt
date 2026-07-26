@@ -2,3 +2,7 @@ langgraph
 langchain
 langchain-anthropic
 pydantic>=2
+fastapi
+uvicorn[standard]
+langgraph-checkpoint-sqlite
+aiosqlite

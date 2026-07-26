@@ -22,7 +22,12 @@ from query_lg.state import build_initial_state
 async def main():
     question = "What's AAPL's price on 2026-07-15?"
     state = build_initial_state(question, "live-test-1")
-    config = {"configurable": {"thread_id": "live-test-1"}}  # no model_factory -> real API
+    config = {
+        "configurable": {
+            "thread_id": "live-test-1",
+            "model_name": "anthropic:claude-haiku-4-5-20251001",
+        }
+    }
 
     print(f"Question: {question}\n")
     result = await compiled_graph.ainvoke(state, config=config)
