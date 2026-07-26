@@ -17,10 +17,44 @@ rather than hardcoding a model string or constructing its own default.
 """
 
 from typing import Optional
+import os
 from langchain_core.runnables import RunnableConfig
 from langchain.chat_models import init_chat_model
 
 DEFAULT_MODEL = "anthropic:claude-haiku-4-5-20251001"
+
+
+def _bootstrap_api_key() -> None:
+    """Runs ONCE at import (not per-call, not per-node) — before this
+    existed, query_lg relied purely on init_chat_model reading
+    ANTHROPIC_API_KEY straight from the environment, with no awareness
+    of Secrets Manager at all. That's fine for local dev (where you
+    export it yourself) but left the deployed container with nothing
+    to read on EC2, since V1's Secrets Manager fallback lives in
+    query.config, not here.
+
+    This reuses that EXACT same secret (trade-platform/{ENV}/anthropic-api-key)
+    via the same resolution query.config._resolve_api_key() already
+    does, so there's exactly one key managed in exactly one place — it
+    just also sets it into os.environ here so init_chat_model picks it
+    up with zero other code changes. If ANTHROPIC_API_KEY is already
+    set (local dev, CI), this is a no-op and never touches it.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return
+
+    try:
+        from query.config import _resolve_api_key
+        os.environ["ANTHROPIC_API_KEY"] = _resolve_api_key()
+    except Exception:
+        # Neither Secrets Manager nor an env var is available — leave
+        # ANTHROPIC_API_KEY unset. init_chat_model will raise its own
+        # clear "could not resolve authentication method" error on the
+        # first real model call, same as today.
+        pass
+
+
+_bootstrap_api_key()
 
 
 def resolve_model(config: Optional[RunnableConfig], temperature: float = 0):
