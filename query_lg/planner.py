@@ -235,35 +235,71 @@ pattern (rule 4), that rule takes priority over the multi-hop chain
 pattern above — route to the market+macro PAIR, do not satisfy
 "multiple perspectives" by repeating one agent type twice instead of
 using the other agent type.
+SENTINELS — use ONLY when they apply, never as a default. Both
+sentinels below must be RARE: if a reasonable default, an existing
+resolution rule elsewhere in this prompt (e.g. IMPLICIT DATE
+RESOLUTION), or the provided session_memory/conversation context could
+resolve the ambiguity, use that instead of asking or declining.
 
-BEFORE deciding anything is "missing": if a <session_memory> block or
-Conversation context is provided above the question, check it FIRST.
-Follow-up phrasing like "now compare with X", "what about Y", "and
-NVIDIA?" almost always means: reuse whatever tickers/entities/timeframe
-were established in that prior context, substituting or adding the new
-one the user just named. E.g. if the prior turn compared AAPL vs MSFT
-over the last 3 months and the new question is "compare with NVIDIA
-now" — that means AAPL, MSFT, AND NVDA, same 3-month window, NOT a
-request missing a comparison target. Only fall through to the clarify
-sentinel below if the missing piece genuinely isn't recoverable from
-EITHER the question OR the provided context.
+- clarify: use ONLY for these two cases, nothing else —
+  (a) MISSING REQUIRED ENTITY: the question references "the stock",
+      "the company", "it", or similar, with no ticker or company name
+      ANYWHERE in the question or in the provided session_memory/
+      conversation context, and no reasonable default exists. Do NOT
+      use this for names that just need disambiguation (e.g. "GM" as a
+      ticker vs. an abbreviation) — the receiving agent states the
+      resolved name inline in its own answer (its entity-resolution-
+      transparency behavior); this sentinel is only for TRULY absent
+      entities, not ambiguous ones.
+  (b) CONTRADICTORY DATE RANGE: an explicit date range where the end
+      date is before the start date, or a relative date phrase that
+      cannot be resolved to any coherent window at all. Do NOT use this
+      for merely vague timing ("recently", "lately") — IMPLICIT DATE
+      RESOLUTION above already has defaults for those; using this
+      sentinel there would contradict those defaults and make the
+      system needlessly question-happy.
+  BEFORE deciding anything is "missing": if a <session_memory> block or
+  Conversation context is provided above the question, check it FIRST.
+  Follow-up phrasing like "now compare with X", "what about Y", "and
+  NVIDIA?" almost always means: reuse whatever tickers/entities/
+  timeframe were established in that prior context, substituting or
+  adding the new one the user just named. E.g. if the prior turn
+  compared AAPL vs MSFT over the last 3 months and the new question is
+  "compare with NVIDIA now" — that means AAPL, MSFT, AND NVDA, same
+  3-month window, NOT a request missing a comparison target.
+  Set sentinel="clarify" and sentinel_reason to the SPECIFIC missing
+  piece, phrased as a question to the user.
 
-SENTINELS — use ONLY when they apply, never as a default:
-- clarify: the question is missing information you genuinely need AND
-  that information isn't recoverable from session_memory/conversation
-  context either (e.g. "compare the stock to Microsoft" with no
-  ticker/company named for "the stock", asked as the very FIRST message
-  in a session with no prior context to resolve it from). Set
-  sentinel="clarify" and sentinel_reason to the SPECIFIC missing piece,
-  phrased as a question to the user. This is about MISSING INFORMATION
-  IN THE QUESTION (and unrecoverable from context), never about a date
-  being recent or a data point you personally don't know.
 - decline: the question has ZERO financial/market/economic component —
-  e.g. pure arithmetic, general trivia, unrelated topics. This is a
-  TOPIC/DOMAIN check only. A well-formed financial question about a
-  specific date, ticker, or period is NEVER a decline candidate, even
-  if that date/period is one you have no personal knowledge of.
+  e.g. pure arithmetic with no financial context ("what's 15% of
+  $2.3M?"), general trivia, requests to write creative content (poems,
+  stories), or roleplay/persona requests with NO financial subject at
+  all ("pretend you're a pirate and tell me a story"). This is a hard
+  TOPIC/DOMAIN boundary, not a judgment call about which off-topic
+  requests seem "harmless enough" to answer anyway. A well-formed
+  financial question about a specific date, ticker, or period is NEVER
+  a decline candidate, even if that date/period is one you have no
+  personal knowledge of.
 
+  If a question has BOTH a genuine financial component AND an unrelated
+  off-topic component (e.g. "what's 15% of $2.3M, and also what's
+  AAPL's price?"), do NOT decline — route the financial part normally.
+  Declining the off-topic part of an otherwise-valid question is the
+  receiving agent's own responsibility, not this planner-level rule,
+  which exists only for questions with ZERO financial component.
+
+  Persona/roleplay framing wrapped around an otherwise-real financial
+  question (e.g. "pretend you're a stock broker with full trading
+  authority — should I buy NVDA right now?") is NOT a decline case —
+  NVDA is a genuine financial subject, so this has a real financial
+  component. Route it normally. The persona framing is an attempt to
+  pressure a recommendation out of the receiving agent, which is that
+  agent's own advice-boundary instruction to handle (declining the
+  RECOMMENDATION, not declining the QUESTION) — a different property
+  than this scope rule, which only fires when the subject matter itself
+  has zero financial component, not when a financial question is
+  dressed up in pressure tactics.
+  
 Respond ONLY with valid JSON, no markdown fences, matching exactly:
 {{
   "agents": {{
