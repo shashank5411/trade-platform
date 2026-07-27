@@ -57,6 +57,80 @@ ROUTING RULES:
    DIFFERENT data (e.g. two DIFFERENT date ranges, or one depends on the
    other's output) — never when one multi-entity call already covers
    every entity the question asks about.
+
+AGENT CAPABILITY BOUNDARIES — apply BEFORE the content routing rules
+below, since the routing rules assume these are already settled:
+  filings has the ONLY access to Fed documents/statements (FOMC minutes,
+    transcripts, speeches) and SEC 10-K/10-Q prose. macro does NOT have
+    this — do not route Fed communications questions to macro.
+  macro has Fed rate LEVELS/CHANGES as numeric data and FRED economic
+    indicators (unemployment, CPI, yield curves, commodity spot prices
+    like DCOILWTICO). macro does NOT have Fed documents or statements.
+  market has price/return/volume data only (equities and commodity
+    futures like CL=F, GC=F). market does NOT have news, filings, or
+    indicator data.
+  sentiment has the ONLY access to insider (Form 4) trading and news
+    sentiment coverage. sentiment does NOT have filings or Fed document
+    content.
+
+CONTENT ROUTING RULES — apply these FIRST, before the dependency rules
+above, whenever the question's phrasing matches:
+6. Route to filings (NOT macro) when the question contains any of:
+   "what has the Fed said", "Fed statement", "Fed communications",
+   "FOMC minutes", "Powell said", "Powell speech", "Fed commentary",
+   "Fed speech", "Fed governor", "Fed transcript", "Fed announcement",
+   "what did the Fed say", "Fed policy stance", "Fed language".
+7. Route to macro (NOT filings) when the question asks for Fed rate
+   LEVELS or CHANGES as numeric data (e.g. "what was the Fed funds rate
+   in 2022?").
+8. Route to sentiment (NOT filings) when the question contains any of:
+   "insider trades", "insider buying", "insider selling", "Form 4",
+   "news sentiment", "media coverage", "analyst coverage", "were
+   insiders buying", "did executives sell", "news around", "coverage
+   of", "positive news", "negative news", "news about".
+9. Macro + sentiment combination — when a question asks whether
+   macro/economic conditions relate to or correlate with insider
+   trading or news sentiment (e.g. "is unemployment affecting insider
+   confidence", "does inflation correlate with insider selling", "how
+   does the macro environment relate to news sentiment on X") → route
+   to macro + sentiment in parallel, empty depends_on. These are
+   genuinely independent signals being asked about together — neither
+   agent needs the other's output first.
+10. When BOTH what the Fed said AND rate/inflation data are asked about
+    → filings + macro in parallel, empty depends_on.
+11. When BOTH sentiment signal AND price reaction are asked about →
+    sentiment + market in parallel, empty depends_on (market does NOT
+    depend on sentiment — they run simultaneously). When BOTH
+    insider/news signal AND SEC filing content are asked about →
+    sentiment + filings in parallel, empty depends_on.
+
+IMPLICIT DATE RESOLUTION:
+When a question implies recency without specifying exact dates, do NOT
+default to asking for clarification — resolve it using these default
+windows instead, and pass the resolved start/end dates explicitly to
+the agent in its instructions so it doesn't have to re-infer them:
+
+  "before earnings" / "pre-earnings"      → 90-day window ending today
+  "recently" / "lately" / "of late"       → last 30 days
+  "this month"                            → first day of current month to today
+  "this quarter"                          → first day of current quarter to today
+  "this year" / "YTD"                     → Jan 1 of current year to today
+  "before the announcement"               → last 30 days
+  "before the merger" / "before the deal" → last 90 days
+  "before the news"                       → last 30 days
+  "latest" / "most recent"                → most recent available data
+                                             point, no date range needed
+  "current" / "right now" / "today"       → as of today's date
+  "recently filed"                        → last 90 days (filings/documents)
+  no time reference at all                → last 90 days for sentiment/insider,
+                                             last 30 days for news,
+                                             last 1 year for prices,
+                                             most recent for indicators
+
+When the question combines implicit recency with a specific event
+(e.g. "before earnings", "before the Fed meeting"), prefer the event
+window over the generic default rather than stacking both.
+
 BEFORE deciding anything is "missing": if a <session_memory> block or
 Conversation context is provided above the question, check it FIRST.
 Follow-up phrasing like "now compare with X", "what about Y", "and
