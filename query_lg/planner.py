@@ -131,6 +131,111 @@ When the question combines implicit recency with a specific event
 (e.g. "before earnings", "before the Fed meeting"), prefer the event
 window over the generic default rather than stacking both.
 
+MULTI-AGENT MERGE AND FAN-OUT PATTERNS
+
+Some questions combine 2-3 independent-sounding clauses that actually
+have a real dependency structure, not a flat parallel structure. Watch
+for these patterns specifically:
+
+MERGE — (A, B) -> C: when a question gives two pieces of context (e.g.
+"insiders selling AND the stock dropped X%") and then asks a THIRD agent
+to explain or react to BOTH of them together (e.g. "...does the 10-K
+explain this?"), the third agent's node should depend_on BOTH upstream
+nodes, not run in parallel with them. Signal phrase: "does X explain
+this" / "in light of" / "given both" appearing after two distinct data
+points have already been stated.
+
+FAN-OUT — A -> (B, C): when a question establishes one shared event or
+context (e.g. "given the SVB collapse" / "given the Fed's rate stance")
+and then asks for TWO separate downstream analyses using that same
+context (e.g. "how did stocks react AND what did insiders do"), both
+downstream agents should depend_on the same upstream node, not run
+independently without that shared context.
+
+Do not default these patterns to a flat parallel DAG just because
+multiple agent types are mentioned — check whether the question's
+clauses build on each other or are genuinely independent before
+choosing parallel vs. merge vs. fan-out shape.
+
+WORKED EXAMPLE — market agent as merge point. Market is not just an
+independent data source — it can also be the agent that RECEIVES two
+upstream signals and judges magnitude/proportionality between them, the
+same way filings can receive upstream signals and judge them against
+business fundamentals. Do not default to flat parallel or to filings
+just because the question involves price data plus two other signals:
+
+  "Unemployment is rising and JPM insiders are selling — is the SIZE of
+   JPM's stock price move consistent with the SIZE of those two
+   signals, or has the price moved more/less than the signals alone
+   would suggest?"
+
+This question is explicitly about MAGNITUDE COMPARISON — whether a
+price move is proportionally consistent with two upstream signals. That
+comparison must happen inside the agent holding the actual price data
+(market), with both upstream signals available to it — not deferred to
+a flat parallel + synthesis shape, and not redirected to filings, which
+has no special claim on judging PRICE magnitude specifically. Filings is
+the right merge point for business-fundamentals questions ("does the
+pessimism match what the 10-K discloses about credit exposure, risk
+factors, loan loss reserves"); market is the right merge point for
+price-magnitude questions ("does the SIZE of the move match the SIZE of
+the signals") — these are two different kinds of judgment, and the
+agent chosen as merge point must match which kind the question is
+actually asking for.
+
+CORRECT for the worked example above:
+  "macro_1":     {{"agent": "macro", "depends_on": [], "reason": "..."}}
+  "sentiment_1": {{"agent": "sentiment", "depends_on": [], "reason": "..."}}
+  "market_1":    {{"agent": "market", "depends_on": ["macro_1", "sentiment_1"],
+                   "reason": "judge whether price move magnitude is
+                   proportional to the upstream unemployment and
+                   insider-selling signals"}}
+
+WRONG — do not do either of these for a magnitude-comparison question:
+  (a) flat parallel (macro_1, sentiment_1, market_1 all independent,
+      with the actual comparison deferred to synthesis)
+  (b) redirecting the merge point to filings just because filings is
+      generally good at "explaining" — filings has no access to the
+      upstream signals' magnitudes in a way that's more relevant than
+      market having direct price data; only route to filings when the
+      question is about whether pessimism is WARRANTED by business
+      fundamentals, not whether a price move's SIZE matches signal SIZE.
+
+WHEN TO REPEAT AN AGENT (multi-hop chains):
+Some questions describe a chain of 2+ effects where the same kind of
+analysis (e.g. price/performance) is needed at two different points in
+the chain, fed by different upstream context each time. Example: "How
+did macro conditions affect crude prices, and what did that mean for
+petroleum stocks?" — crude price analysis and equity price analysis are
+BOTH market questions, but they are two distinct steps:
+  "macro_1":  {{"agent": "macro", "depends_on": [], "reason": "..."}}
+  "market_1": {{"agent": "market", "depends_on": ["macro_1"], "reason":
+               "crude price reaction to macro context"}}
+  "market_2": {{"agent": "market", "depends_on": ["market_1"], "reason":
+               "petroleum equities using market_1's crude-price finding"}}
+Do NOT collapse this into a single market node just because both steps
+use the same agent type — if the question's logic has two distinct
+hops, the DAG should have two distinct nodes, even when they share an
+agent type. Collapsing loses the sequential reasoning the question is
+actually asking for. This is a DIFFERENT situation from rule 5 above —
+rule 5 is about NOT duplicating a node when one multi-entity call
+already covers everything asked; this is about NOT collapsing two
+genuinely sequential hops into one node just because they share an
+agent type.
+
+COUNTER-EXAMPLE — do NOT do this: "Is WTI crude oil expensive right
+now?" should NOT become macro_1 (general context) -> macro_2 (price
+comparison) — that's avoiding the real ambiguity by staying inside one
+agent type. This question matches the commodity disambiguation rule
+above (rule 4) and should be market_1 + macro_1 in PARALLEL, not two
+macro calls in sequence.
+
+PRECEDENCE NOTE: when a question matches the commodity disambiguation
+pattern (rule 4), that rule takes priority over the multi-hop chain
+pattern above — route to the market+macro PAIR, do not satisfy
+"multiple perspectives" by repeating one agent type twice instead of
+using the other agent type.
+
 BEFORE deciding anything is "missing": if a <session_memory> block or
 Conversation context is provided above the question, check it FIRST.
 Follow-up phrasing like "now compare with X", "what about Y", "and
