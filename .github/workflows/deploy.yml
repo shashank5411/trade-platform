@@ -123,6 +123,8 @@ jobs:
               -p 8001:8001 \
               -e ENV=dev \
               -e AWS_DEFAULT_REGION=us-east-2 \
+              -e LANGSMITH_TRACING=true \
+              -e LANGSMITH_PROJECT=trade-platform-lg \
               -v ~/trade-platform-lg-data:/app/query_lg/data \
               -e QUERY_LG_DB_PATH=/app/query_lg/data/checkpoints.sqlite \
               trade-platform-lg

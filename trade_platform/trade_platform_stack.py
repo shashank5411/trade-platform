@@ -364,7 +364,14 @@ class TradePlatformStack(Stack):
                 f"trade-platform/{env_name}/anthropic-api-key",
         )
 
+        langsmith_secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "LangSmithApiKey",
+            f"trade-platform/{env_name}/langsmith-api-key",
+        )
+
         anthropic_secret.grant_read(ec2_role)
+        langsmith_secret.grant_read(ec2_role)
+        
         sec_prose_bucket.grant_read(ec2_role)
         
         # ── Glue ingestion job role ───────────────────────────────────────────

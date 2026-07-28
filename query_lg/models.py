@@ -39,19 +39,36 @@ def _bootstrap_api_key() -> None:
     just also sets it into os.environ here so init_chat_model picks it
     up with zero other code changes. If ANTHROPIC_API_KEY is already
     set (local dev, CI), this is a no-op and never touches it.
+    Also bootstraps LANGSMITH_API_KEY from the same Secrets Manager
+    pattern (trade-platform/{ENV}/langsmith-api-key) if not already set.
     """
-    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    anthropic_done = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    langsmith_done = bool(os.environ.get("LANGSMITH_API_KEY", "").strip())
+
+    if anthropic_done and langsmith_done:
         return
 
-    try:
-        from query.config import _resolve_api_key
-        os.environ["ANTHROPIC_API_KEY"] = _resolve_api_key()
-    except Exception:
-        # Neither Secrets Manager nor an env var is available — leave
-        # ANTHROPIC_API_KEY unset. init_chat_model will raise its own
-        # clear "could not resolve authentication method" error on the
-        # first real model call, same as today.
-        pass
+    env = os.environ.get("ENV", "dev")
+
+    if not anthropic_done:
+        try:
+            from query.config import _resolve_api_key
+            os.environ["ANTHROPIC_API_KEY"] = _resolve_api_key()
+        except Exception:
+            pass
+
+    if not langsmith_done:
+        try:
+            import boto3
+            sm = boto3.client("secretsmanager", region_name="us-east-2")
+            response = sm.get_secret_value(
+                SecretId=f"trade-platform/{env}/langsmith-api-key"
+            )
+            key = response.get("SecretString", "").strip()
+            if key:
+                os.environ["LANGSMITH_API_KEY"] = key
+        except Exception:
+            pass
 
 
 _bootstrap_api_key()

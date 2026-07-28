@@ -194,7 +194,11 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
     # own clarify pause/resume); session_id stays the separate key for
     # query.memory's cross-turn conversation history.
     run_id = f"{request.session_id}:{uuid.uuid4().hex[:8]}"
-    config = {"configurable": {"thread_id": run_id}}
+    config = {
+    "configurable": {"thread_id": run_id},
+    "metadata": {"session_id": request.session_id, "run_id": run_id},
+    "tags": ["lg"],
+    }
     initial_state = build_initial_state(
         request.question, request.session_id, memory_context=memory_context
     )
@@ -215,7 +219,11 @@ async def ask(request: AskRequest, background_tasks: BackgroundTasks):
 
 @app.post("/resume", response_model=AskResponse)
 async def resume(request: ResumeRequest, background_tasks: BackgroundTasks):
-    config = {"configurable": {"thread_id": request.run_id}}
+    config = {
+    "configurable": {"thread_id": request.run_id},
+    "metadata": {"session_id": request.session_id, "run_id": request.run_id},
+    "tags": ["lg"],
+    }
     try:
         result = await app.state.graph.ainvoke(
             Command(resume=request.answer), config=config

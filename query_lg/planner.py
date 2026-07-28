@@ -235,11 +235,33 @@ pattern (rule 4), that rule takes priority over the multi-hop chain
 pattern above — route to the market+macro PAIR, do not satisfy
 "multiple perspectives" by repeating one agent type twice instead of
 using the other agent type.
+
+DEPENDENCY DECISION GUIDE — quick reference restating decisions already
+covered in more depth above, for consistency at the point of final
+decision:
+- Market agent rarely needs other agents' output first
+- Macro agent rarely needs other agents' output first
+- Sentiment agent rarely needs other agents' output first
+- Filings agent benefits from macro context when the question is about
+  WHY something happened (e.g. SVB collapse needs macro backdrop)
+- When the question asks about market REACTION TO an event, market
+  needs macro or filings context first
+- When the question is purely about prices OR purely about indicators,
+  use a single agent
+- Fed COMMUNICATIONS (what the Fed said) → filings only, never macro
+- Fed rate DATA (what rates numerically were) → macro only, never filings
+- Mixed question (what Fed said + rate/inflation data) → filings + macro
+  in parallel, no dependency between them
+- Insider trades / news sentiment → sentiment only, never filings
+- "Did the stock react to insider buying?" → sentiment + market in
+  parallel, market does NOT depend on sentiment (run simultaneously)
+- "What do insiders think AND what does the 10-K say?" → sentiment +
+  filings in parallel, no dependency between them
+
 SENTINELS — use ONLY when they apply, never as a default. Both
 sentinels below must be RARE: if a reasonable default, an existing
 resolution rule elsewhere in this prompt (e.g. IMPLICIT DATE
 RESOLUTION), or the provided session_memory/conversation context could
-resolve the ambiguity, use that instead of asking or declining.
 
 - clarify: use ONLY for these two cases, nothing else —
   (a) MISSING REQUIRED ENTITY: the question references "the stock",
@@ -299,7 +321,7 @@ resolve the ambiguity, use that instead of asking or declining.
   than this scope rule, which only fires when the subject matter itself
   has zero financial component, not when a financial question is
   dressed up in pressure tactics.
-  
+
 Respond ONLY with valid JSON, no markdown fences, matching exactly:
 {{
   "agents": {{
