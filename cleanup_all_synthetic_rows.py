@@ -63,8 +63,8 @@ def clean_partition(bucket: str, key: str, id_column: str, label: str):
 
 
 def main():
-    insiders_bucket = "dev-trade-insiders-processed-197411402303"
-    news_bucket     = "dev-trade-news-processed-197411402303"
+    insiders_bucket = "dev-trade-insiders-processed-<ACCOUNT_ID>"
+    news_bucket     = "dev-trade-news-processed-<ACCOUNT_ID>"
 
     print("=== Insiders ===")
     clean_partition(insiders_bucket,

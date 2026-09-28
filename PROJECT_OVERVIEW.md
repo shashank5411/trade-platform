@@ -4,7 +4,7 @@
 
 **Stack:** Python · AWS CDK (Python) · AWS Glue (Python Shell) · S3 · Athena · DynamoDB · Secrets Manager · S3 Vectors (Cohere Embed v3) · Anthropic SDK
 
-**Region:** `us-east-2`  |  **Dev account:** `197411402303`  |  **Env prefix:** `dev` / `prod`
+**Region:** `us-east-2`  |  **Dev account:** `<ACCOUNT_ID>`  |  **Env prefix:** `dev` / `prod`
 
 > This doc is a factual current-state reference for coding work, not a design-decision log. Architecture/reasoning discussion happens elsewhere — keep edits here limited to "what exists and where," not "what should we do."
 
@@ -460,7 +460,7 @@ Per-source health check + `--reset`/`--fire` CLI. `SOURCE_CONFIG` dict has an en
 | Config                            | Value                                                         |
 |-----------------------------------|---------------------------------------------------------------|
 | AWS region                        | `us-east-2`                                                   |
-| Dev account ID                    | `197411402303`                                                |
+| Dev account ID                    | `<ACCOUNT_ID>`                                                |
 | Embed model                       | `cohere.embed-english-v3` (us-east-1)                        |
 | Vector dimensions                 | 1024                                                          |
 | Glue version / Python Shell DPU   | 3.0 / 0.0625 (1/16)                                          |

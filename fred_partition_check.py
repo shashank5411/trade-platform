@@ -1,7 +1,7 @@
 ﻿import boto3
 
 s3 = boto3.client("s3", region_name="us-east-2")
-bucket = "dev-trade-fred-processed-197411402303"
+bucket = "dev-trade-fred-processed-<ACCOUNT_ID>"
 
 paginator = s3.get_paginator("list_objects_v2")
 keys = []

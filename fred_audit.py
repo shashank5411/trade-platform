@@ -3,7 +3,7 @@ import pyarrow.parquet as pq
 import io
 
 s3 = boto3.client("s3", region_name="us-east-2")
-bucket = "dev-trade-fred-processed-197411402303"
+bucket = "dev-trade-fred-processed-<ACCOUNT_ID>"
 
 affected_series = [
     "DTWEXBGS", "DEXUSEU", "DEXJPUS", "DEXUSUK", "DEXINUS", "DEXCHUS",

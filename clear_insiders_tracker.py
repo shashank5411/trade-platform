@@ -55,7 +55,7 @@ REGION = "us-east-2"
 
 
 def _raw_bucket(env: str) -> str:
-    account = os.environ.get("ACCOUNT", "197411402303")
+    account = os.environ.get("ACCOUNT", "<ACCOUNT_ID>")
     return f"{env}-trade-{SOURCE}-raw-{account}"
 
 

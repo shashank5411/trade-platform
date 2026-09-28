@@ -5,7 +5,7 @@ athena = boto3.client("athena", region_name="us-east-2")
 resp = athena.start_query_execution(
     QueryString="MSCK REPAIR TABLE market_prices",
     QueryExecutionContext={"Database": "dev_trade_yfinance_processed"},
-    ResultConfiguration={"OutputLocation": "s3://dev-trade-athena-results-197411402303/"}
+    ResultConfiguration={"OutputLocation": "s3://dev-trade-athena-results-<ACCOUNT_ID>/"}
 )
 qid = resp["QueryExecutionId"]
 print("QueryId:", qid)

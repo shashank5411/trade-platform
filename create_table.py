@@ -21,14 +21,14 @@ sql = (
     "  year        string,"
     "  `exchange`  string"
     ") STORED AS PARQUET"
-    " LOCATION 's3://dev-trade-yfinance-processed-197411402303/market_prices/'"
+    " LOCATION 's3://dev-trade-yfinance-processed-<ACCOUNT_ID>/market_prices/'"
     " TBLPROPERTIES ('parquet.compress'='SNAPPY')"
 )
 
 resp = athena.start_query_execution(
     QueryString=sql,
     QueryExecutionContext={"Database": "dev_trade_yfinance_processed"},
-    ResultConfiguration={"OutputLocation": "s3://dev-trade-athena-results-197411402303/"}
+    ResultConfiguration={"OutputLocation": "s3://dev-trade-athena-results-<ACCOUNT_ID>/"}
 )
 qid = resp["QueryExecutionId"]
 print("QueryId:", qid)

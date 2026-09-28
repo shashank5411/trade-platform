@@ -2,7 +2,7 @@
 import json
 
 s3v = boto3.client('s3vectors', region_name='us-east-2')
-bucket = 'dev-trade-vectors-197411402303'
+bucket = 'dev-trade-vectors-<ACCOUNT_ID>'
 index  = 'documents-index'
 
 # List all vector keys and delete in batches of 500

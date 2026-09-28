@@ -66,7 +66,7 @@ def _table_name(env: str) -> str:
 
 
 def _raw_bucket(env: str) -> str:
-    account = os.environ.get("ACCOUNT", "197411402303")
+    account = os.environ.get("ACCOUNT", "<ACCOUNT_ID>")
     return f"{env}-trade-{SOURCE}-raw-{account}"
 
 

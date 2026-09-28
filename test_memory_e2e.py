@@ -23,7 +23,7 @@ Usage:
   python test_memory_e2e.py
 
   # Override endpoint or region:
-  BASE_URL=http://23.22.130.72:8000 python test_memory_e2e.py
+  BASE_URL=http://localhost:8000 python test_memory_e2e.py
 """
 
 import os
@@ -41,7 +41,7 @@ from boto3.dynamodb.conditions import Key
 # Config
 # ---------------------------------------------------------------------------
 
-BASE_URL   = os.getenv("BASE_URL", "http://23.22.130.72:8000")
+BASE_URL   = os.getenv("BASE_URL", "http://localhost:8000")
 TABLE_NAME = os.getenv("DYNAMO_TABLE", "trade-platform-dev-conversations")
 REGION     = os.getenv("AWS_REGION", "us-east-2")
 

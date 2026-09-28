@@ -29,7 +29,7 @@ import json
 from datetime import datetime, timezone, timedelta
 
 REGION     = "us-east-2"
-ACCOUNT_ID = "197411402303"
+ACCOUNT_ID = "<ACCOUNT_ID>"
 ENV        = "dev"
 
 glue    = boto3.client("glue",     region_name=REGION)

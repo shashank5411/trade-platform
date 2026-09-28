@@ -25,7 +25,7 @@ QUERIES = {
 }
 
 # Athena needs an S3 location to write query results to
-ATHENA_OUTPUT_LOCATION = "s3://aws-athena-query-results-197411402303-us-east-2/"
+ATHENA_OUTPUT_LOCATION = "s3://aws-athena-query-results-<ACCOUNT_ID>-us-east-2/"
 
 
 def run_query(database, query):

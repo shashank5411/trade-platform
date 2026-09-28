@@ -20,18 +20,18 @@ $old_buckets = @(
     "tradeplatformstack-dev-wtorawbucket696208ec-tlfrrf6s0rg7",
 
     # Explicit-named buckets from old shipping sources (orphaned after pivot deploy)
-    "dev-trade-comtrade-raw-197411402303",
-    "dev-trade-comtrade-processed-197411402303",
-    "dev-trade-unctad-raw-197411402303",
-    "dev-trade-unctad-processed-197411402303",
-    "dev-trade-eia-raw-197411402303",
-    "dev-trade-eia-processed-197411402303",
-    "dev-trade-acled-raw-197411402303",
-    "dev-trade-acled-processed-197411402303",
-    "dev-trade-imf-raw-197411402303",
-    "dev-trade-imf-processed-197411402303",
-    "dev-trade-wto-raw-197411402303",
-    "dev-trade-wto-processed-197411402303"
+    "dev-trade-comtrade-raw-<ACCOUNT_ID>",
+    "dev-trade-comtrade-processed-<ACCOUNT_ID>",
+    "dev-trade-unctad-raw-<ACCOUNT_ID>",
+    "dev-trade-unctad-processed-<ACCOUNT_ID>",
+    "dev-trade-eia-raw-<ACCOUNT_ID>",
+    "dev-trade-eia-processed-<ACCOUNT_ID>",
+    "dev-trade-acled-raw-<ACCOUNT_ID>",
+    "dev-trade-acled-processed-<ACCOUNT_ID>",
+    "dev-trade-imf-raw-<ACCOUNT_ID>",
+    "dev-trade-imf-processed-<ACCOUNT_ID>",
+    "dev-trade-wto-raw-<ACCOUNT_ID>",
+    "dev-trade-wto-processed-<ACCOUNT_ID>"
 )
 
 foreach ($bucket in $old_buckets) {
