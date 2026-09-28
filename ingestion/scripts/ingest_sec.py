@@ -52,7 +52,9 @@ ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 BUCKET     = f"{ENV}-trade-{SOURCE}-raw-{ACCOUNT_ID}"
 S3         = boto3.client("s3", region_name="us-east-2")
 
-HEADERS   = {"User-Agent": "TradePlatform research@example.com"}
+# SEC requires a real contact in the User-Agent (FAIR ACCESS policy) —
+# set SEC_USER_AGENT to your own contact info before running against EDGAR.
+HEADERS   = {"User-Agent": os.environ.get("SEC_USER_AGENT", "TradePlatform research@example.com")}
 REQ_DELAY = 0.15    # ~6 req/sec — safely under EDGAR 10 req/sec limit
 
 

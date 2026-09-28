@@ -1,4 +1,7 @@
-﻿import sys
+﻿# INTEGRATION/LIVE: reads real documents from S3 (PROSE_BUCKET) via
+# ingestion/etl/etl_embed.py. Requires AWS credentials and must be run
+# from the repo root: python tests/integration/test_embed.py
+import sys
 sys.path.insert(0, 'ingestion')
 from etl.etl_embed import *
 

@@ -2,8 +2,17 @@
 Direct planner_node tests against a live model — checks the two things
 just ported: content-routing trigger phrases (Fed comms -> filings, not
 macro) and implicit date resolution ("this quarter", "recently").
+
+INTEGRATION/LIVE: calls the real model via planner_node and runs at
+import time (no pytest fixtures) — not meant for CI. Run manually:
+python tests/integration/test_planner_routing.py
 """
+import os
+import sys
 import asyncio
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
 from query_lg.planner import planner_node
 from query_lg.state import GraphState
 

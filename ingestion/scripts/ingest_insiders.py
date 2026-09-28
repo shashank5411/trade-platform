@@ -45,8 +45,10 @@ RAW_BUCKET = f"{ENV}-trade-insiders-raw-{ACCOUNT}"
 # ── Fix D: S3 client with region ──────────────────────────────────────────────
 s3 = boto3.client("s3", region_name=REGION)
 
+# SEC requires a real contact in the User-Agent (FAIR ACCESS policy) —
+# set SEC_USER_AGENT to your own contact info before running against EDGAR.
 HEADERS = {
-    "User-Agent": "trade-platform/1.0 research@example.com",
+    "User-Agent": os.environ.get("SEC_USER_AGENT", "trade-platform/1.0 research@example.com"),
     "Accept-Encoding": "gzip, deflate",
 }
 BASE_URL     = "https://data.sec.gov"   # submissions API

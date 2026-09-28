@@ -2,8 +2,17 @@
 Direct planner_node tests for the clarify/decline boundary precision
 just ported — persona/roleplay carve-out, mixed-question handling, and
 the entity-disambiguation carve-out (GM ticker vs. abbreviation).
+
+INTEGRATION/LIVE: calls the real model via planner_node and runs at
+import time (no pytest fixtures) — not meant for CI. Run manually:
+python tests/integration/test_planner_boundaries.py
 """
+import os
+import sys
 import asyncio
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
 from query_lg.planner import planner_node
 from query_lg.state import GraphState
 

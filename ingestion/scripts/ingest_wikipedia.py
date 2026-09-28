@@ -49,7 +49,10 @@ BUCKET     = f"{ENV}-trade-{SOURCE}-raw-{ACCOUNT_ID}"
 S3         = boto3.client("s3", region_name="us-east-2")
 
 BASE_URL = "https://en.wikipedia.org/api/rest_v1/page/summary"
-HEADERS  = {"User-Agent": "TradePlatform/1.0 (research@example.com)"}
+# Wikipedia's API etiquette also expects a real contact in the User-Agent
+# (SEC's FAIR ACCESS policy requires the same elsewhere in this codebase) —
+# set SEC_USER_AGENT to your own contact info before running.
+HEADERS  = {"User-Agent": os.environ.get("SEC_USER_AGENT", "TradePlatform/1.0 (research@example.com)")}
 
 
 def fetch_topic(topic: str) -> dict:

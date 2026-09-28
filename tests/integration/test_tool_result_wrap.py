@@ -10,9 +10,17 @@ Patches query.api.get_prose (the underlying function query_lg's
 object itself — this keeps the tool's real schema intact for
 bind_tools(), so the model sees and calls a completely normal-looking
 tool. Only the data it gets back is fake.
+
+INTEGRATION/LIVE: calls the real model via run_agent() and runs at
+import time (no pytest fixtures) — not meant for CI. Run manually:
+python tests/integration/test_tool_result_wrap.py
 """
+import os
+import sys
 import asyncio
 from unittest.mock import patch
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from query_lg.agent_node import run_agent
 
 MALICIOUS_FILING_TEXT = (

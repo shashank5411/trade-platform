@@ -1,6 +1,9 @@
-﻿import urllib.request
+﻿import os
+import urllib.request
 
-HEADERS = {"User-Agent": "TradePlatform research@example.com"}
+# SEC requires a real contact in the User-Agent (FAIR ACCESS policy) —
+# set SEC_USER_AGENT to your own contact info before running against EDGAR.
+HEADERS = {"User-Agent": os.environ.get("SEC_USER_AGENT", "TradePlatform research@example.com")}
 
 candidates = {
     "JNJ": "0000200406",

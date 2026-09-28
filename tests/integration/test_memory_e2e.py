@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+INTEGRATION/LIVE: requires a running query server (BASE_URL) and a real
+DynamoDB table (trade-platform-dev-conversations) — not meant for CI.
+
 Memory E2E Test
 ===============
 Tests the rolling summary + entity carryover across 10+ turns.

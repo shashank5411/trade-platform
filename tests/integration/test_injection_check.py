@@ -3,8 +3,17 @@ Standalone test for injection_check_node — bypasses the full graph/tool
 calls entirely, feeds it a synthetic final_answer + agent output that
 SHOULD trip the register gate, and shows the REAL judge's actual
 reasoning (not a scripted fake) against your live Anthropic API key.
+
+INTEGRATION/LIVE: calls the real Anthropic API and runs at import time
+(no pytest fixtures) — not meant for CI. Run manually:
+python tests/integration/test_injection_check.py
 """
+import os
+import sys
 import asyncio
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
 from query_lg.graph import injection_check_node, _answer_has_injection_register
 from query_lg.state import GraphState, NodeResult, GroundingGateResult, CritiqueResult
 
