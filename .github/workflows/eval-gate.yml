@@ -1,16 +1,16 @@
 name: Eval Regression Gate
 
-# Standalone workflow, deliberately separate from deploy.yaml.
+# Standalone workflow, deliberately separate from deploy.yml.
 #
-# Why separate rather than a job added to deploy.yaml: deploy.yaml's
+# Why separate rather than a job added to deploy.yml: deploy.yml's
 # top-level `paths:` filter (trade_platform/, ingestion/, requirements.txt,
 # app.py, cdk.json) is scoped to infra changes. Agent/prompt changes land
 # in query/ without touching any of those paths, so a PR that only changes
-# query/planner.py would never trigger deploy.yaml at all — adding a job
+# query/planner.py would never trigger deploy.yml at all — adding a job
 # there wouldn't actually run on the PRs we care about gating.
 #
 # This workflow gets its own trigger scoped to query/**, so it fires
-# independently of deploy.yaml and doesn't affect (or risk breaking)
+# independently of deploy.yml and doesn't affect (or risk breaking)
 # the existing deploy pipeline.
 
 on:
