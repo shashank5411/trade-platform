@@ -10,3 +10,28 @@ cdk.out
 
 # Local secrets — never commit
 set_env.ps1
+.env
+.env.*
+!.env.example
+
+# Local data / build artifacts — never commit
+*.sqlite*
+*.zip
+*.gz
+*.log
+.DS_Store
+.idea/
+.vscode/
+query/evaluations/results/
+
+# One-off log/output files from local ingestion runs
+*_log.txt
+*-logs*.txt
+*_log.json
+*.patch
+tables_to_delete.txt
+chunk3_missing_tickers.txt
+fred_cleanup_keys.txt
+glue-error.txt
+worldbank_raw.json
+sec_AAPL_*.json.gz

@@ -89,8 +89,14 @@ class TradePlatformStack(Stack):
                 conditions={
                     "StringEquals": {
                         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                        "token.actions.githubusercontent.com:sub":
-                            "repo:shashank5411/trade-platform:ref:refs/heads/master"
+                        # push-to-master gets a ref-scoped sub; pull_request-triggered
+                        # runs (deploy.yml's cdk diff step, eval-gate.yml) get a
+                        # branch-agnostic "pull_request" sub instead — both are
+                        # needed or PR-triggered CI can never assume this role.
+                        "token.actions.githubusercontent.com:sub": [
+                            "repo:shashank5411/trade-platform:ref:refs/heads/master",
+                            "repo:shashank5411/trade-platform:pull_request",
+                        ]
                     }
                 }
             ),

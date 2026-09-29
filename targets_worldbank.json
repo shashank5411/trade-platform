@@ -1,1 +1,1 @@
-{"S3Targets": [{"Path": "s3://dev-trade-worldbank-processed-197411402303/economic_indicators/"}]}
+{"S3Targets": [{"Path": "s3://dev-trade-worldbank-processed-<ACCOUNT_ID>/economic_indicators/"}]}

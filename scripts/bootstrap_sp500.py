@@ -7,15 +7,18 @@ Usage: python scripts/bootstrap_sp500.py [--output configs/sources/sec_sp500.yam
 """
 import argparse
 import json
+import os
 import time
 import requests
 import pandas as pd
 import yaml
 from pathlib import Path
-import io 
+import io
 
 EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-HEADERS = {"User-Agent": "TradePlatform research@example.com"}
+# SEC requires a real contact in the User-Agent (FAIR ACCESS policy) —
+# set SEC_USER_AGENT to your own contact info before running against EDGAR.
+HEADERS = {"User-Agent": os.environ.get("SEC_USER_AGENT", "TradePlatform research@example.com")}
 
 
 def fetch_sp500_tickers() -> list[str]:

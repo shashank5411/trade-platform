@@ -1,8 +1,0 @@
-
-[Eval Run 2026-07-09T05-18-28] 1 questions to run
-
-  [SentimentAgent] cache — write: 5193 | read: 0 tokens
-  [FilingsAgent] cache — write: 4851 | read: 0 tokens
-  [FilingsAgent] cache — write: 0 | read: 4851 tokens
-  [SentimentAgent] cache — write: 0 | read: 5193 tokens
-  [FilingsAgent] cache — write: 0 | read: 4851 tokens

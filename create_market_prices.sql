@@ -19,5 +19,5 @@ PARTITIONED BY (
   ticker   string
 )
 STORED AS PARQUET
-LOCATION 's3://dev-trade-yfinance-processed-197411402303/market_prices/'
+LOCATION 's3://dev-trade-yfinance-processed-<ACCOUNT_ID>/market_prices/'
 TBLPROPERTIES ('parquet.compress'='SNAPPY')

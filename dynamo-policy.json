@@ -9,6 +9,6 @@
       "dynamodb:DeleteItem",
       "dynamodb:BatchWriteItem"
     ],
-    "Resource": "arn:aws:dynamodb:us-east-2:197411402303:table/trade-platform-dev-conversations"
+    "Resource": "arn:aws:dynamodb:us-east-2:<ACCOUNT_ID>:table/trade-platform-dev-conversations"
   }]
 }

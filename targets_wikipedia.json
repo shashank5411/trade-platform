@@ -1,1 +1,1 @@
-{"S3Targets": [{"Path": "s3://dev-trade-wikipedia-processed-197411402303/documents/"}]}
+{"S3Targets": [{"Path": "s3://dev-trade-wikipedia-processed-<ACCOUNT_ID>/documents/"}]}
