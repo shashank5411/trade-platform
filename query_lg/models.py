@@ -17,11 +17,14 @@ rather than hardcoding a model string or constructing its own default.
 """
 
 from typing import Optional
+import logging
 import os
 from langchain_core.runnables import RunnableConfig
 from langchain.chat_models import init_chat_model
 
 DEFAULT_MODEL = "anthropic:claude-haiku-4-5-20251001"
+
+logger = logging.getLogger(__name__)
 
 
 def _bootstrap_api_key() -> None:
@@ -54,8 +57,15 @@ def _bootstrap_api_key() -> None:
         try:
             from query.config import _resolve_api_key
             os.environ["ANTHROPIC_API_KEY"] = _resolve_api_key()
-        except Exception:
-            pass
+        except Exception as e:
+            # Don't swallow silently: without this, the failure only surfaces
+            # much later as the SDK's opaque "Could not resolve authentication
+            # method" on the first model call.
+            logger.error(
+                "ANTHROPIC_API_KEY bootstrap failed (%s: %s) — every model "
+                "call will fail. Check AWS credentials / ENV=%s, or export "
+                "ANTHROPIC_API_KEY before starting.", type(e).__name__, e, env,
+            )
 
     if not langsmith_done:
         try:
@@ -67,8 +77,11 @@ def _bootstrap_api_key() -> None:
             key = response.get("SecretString", "").strip()
             if key:
                 os.environ["LANGSMITH_API_KEY"] = key
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "LANGSMITH_API_KEY bootstrap failed (%s: %s) — tracing disabled.",
+                type(e).__name__, e,
+            )
 
 
 _bootstrap_api_key()
